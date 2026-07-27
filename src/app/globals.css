@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/* Identidad visual Cehta Capital */
+@theme inline {
+  --color-brand: #5b1bac;
+  --color-brand-deep: #5a18a8;
+  --color-brand-dark: #3b1173;
+  --color-lavender: #b091d7;
+  --color-lavender-bg: #f1ebfa;
+  --color-ink: #1d1d1f;
+  --color-ink-soft: #4a4a4f;
+  --color-line: #e8e4f0;
+  --color-soft: #f8f8f8;
+
+  --color-ok: #1d7a3a;
+  --color-ok-bg: #e6f7ed;
+  --color-warn: #a85d00;
+  --color-warn-bg: #fff4e0;
+  --color-danger: #c0341d;
+  --color-danger-bg: #ffe9e6;
+
+  --font-sans: var(--font-poppins), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: #ffffff;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Celdas numéricas de grillas */
+.cell-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

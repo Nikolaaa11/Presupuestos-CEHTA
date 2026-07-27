@@ -1,0 +1,263 @@
+// Presupuestos CEHTA — modelo de datos
+// Regla de oro: toda cifra monetaria es Decimal (jamás Float).
+// Los presupuestos APROBADO/CERRADO son inmutables a nivel de API.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────── Entidades ───────────────────────────────
+
+enum CompanyType {
+  ADMINISTRADORA // AFIS
+  FONDO          // FIP CEHTA ESG
+  PORTFOLIO      // las 6 portfolio companies + CENERGY
+}
+
+model Company {
+  id      String      @id @default(cuid())
+  code    String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI
+  name    String
+  type    CompanyType
+  sector  String?
+  users   User[]
+  budgets Budget[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  FUND_ADMIN      // AFIS/FIP: ve todo, aprueba, administra
+  COMPANY_MANAGER // gerente: edita el presupuesto de SU empresa
+  FUND_ANALYST    // fase 2: analista del fondo (solo lectura ampliada)
+  VIEWER          // fase 2
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  companyId    String?
+  company      Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  active       Boolean  @default(true)
+
+  approvalEvents ApprovalEvent[]
+  fxRatesUpdated FxRate[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────── Presupuesto ───────────────────────────────
+
+enum BudgetStatus {
+  BORRADOR
+  ENVIADO
+  OBSERVADO
+  APROBADO
+  CERRADO
+}
+
+enum Currency {
+  CLP
+  UF
+  USD
+}
+
+model Budget {
+  id        String       @id @default(cuid())
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  year      Int // año presupuestado (ej. 2027)
+  version   Int          @default(1)
+  status    BudgetStatus @default(BORRADOR)
+  currency  Currency     @default(CLP)
+
+  salesLines   SalesLine[]
+  expenseLines ExpenseLine[]
+  capexItems   CapexItem[]
+  approvals    ApprovalEvent[]
+
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([companyId, year, version])
+  @@index([companyId, year])
+}
+
+// ─────────────────────────────── Ventas ───────────────────────────────
+
+enum SaleType {
+  CONTRATO           // venta respaldada por contrato
+  PROYECCION_PUBLICO // proyección de venta a público
+  RECURRENTE         // cartera existente
+}
+
+model SalesLine {
+  id       String   @id @default(cuid())
+  budgetId String
+  budget   Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  client   String
+  saleType SaleType @default(PROYECCION_PUBLICO)
+  channel  String? // cómo se vende
+
+  capexItemId String? // vínculo a iniciativa CAPEX (ej. "Local Pargua")
+  capexItem   CapexItem? @relation(fields: [capexItemId], references: [id], onDelete: SetNull)
+
+  m01 Decimal @default(0) @db.Decimal(18, 2)
+  m02 Decimal @default(0) @db.Decimal(18, 2)
+  m03 Decimal @default(0) @db.Decimal(18, 2)
+  m04 Decimal @default(0) @db.Decimal(18, 2)
+  m05 Decimal @default(0) @db.Decimal(18, 2)
+  m06 Decimal @default(0) @db.Decimal(18, 2)
+  m07 Decimal @default(0) @db.Decimal(18, 2)
+  m08 Decimal @default(0) @db.Decimal(18, 2)
+  m09 Decimal @default(0) @db.Decimal(18, 2)
+  m10 Decimal @default(0) @db.Decimal(18, 2)
+  m11 Decimal @default(0) @db.Decimal(18, 2)
+  m12 Decimal @default(0) @db.Decimal(18, 2)
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetId])
+}
+
+// ─────────────────────────────── Gastos ───────────────────────────────
+
+model ExpenseCategory {
+  id        String        @id @default(cuid())
+  name      String        @unique
+  isSystem  Boolean       @default(false) // las de semilla no se borran
+  sortOrder Int           @default(0)
+  lines     ExpenseLine[]
+}
+
+model ExpenseLine {
+  id         String          @id @default(cuid())
+  budgetId   String
+  budget     Budget          @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  item       String // ej. "Sueldos planta", "Arriendo oficina"
+
+  capexItemId String?
+  capexItem   CapexItem? @relation(fields: [capexItemId], references: [id], onDelete: SetNull)
+
+  m01 Decimal @default(0) @db.Decimal(18, 2)
+  m02 Decimal @default(0) @db.Decimal(18, 2)
+  m03 Decimal @default(0) @db.Decimal(18, 2)
+  m04 Decimal @default(0) @db.Decimal(18, 2)
+  m05 Decimal @default(0) @db.Decimal(18, 2)
+  m06 Decimal @default(0) @db.Decimal(18, 2)
+  m07 Decimal @default(0) @db.Decimal(18, 2)
+  m08 Decimal @default(0) @db.Decimal(18, 2)
+  m09 Decimal @default(0) @db.Decimal(18, 2)
+  m10 Decimal @default(0) @db.Decimal(18, 2)
+  m11 Decimal @default(0) @db.Decimal(18, 2)
+  m12 Decimal @default(0) @db.Decimal(18, 2)
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetId])
+}
+
+// ─────────────────────────────── CAPEX ───────────────────────────────
+
+enum FinancingSource {
+  CAJA_PROPIA
+  BANCO
+  FONDO
+  LEASING
+  MIXTO
+}
+
+enum ApprovalStatus {
+  BORRADOR
+  ENVIADO
+  APROBADO
+  OBSERVADO
+  RECHAZADO
+}
+
+model CapexItem {
+  id          String  @id @default(cuid())
+  budgetId    String
+  budget      Budget  @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  description String // qué se compra/construye
+  purpose     String? // para qué
+
+  amount   Decimal  @db.Decimal(18, 2)
+  currency Currency @default(CLP)
+
+  monthNeeded     Int // 1..12 — mes en que se requiere la inversión
+  financingMonths Int? // plazo de financiamiento (ej. 18)
+  financingSource FinancingSource @default(CAJA_PROPIA)
+
+  isInitiative   Boolean @default(false)
+  initiativeName String? // ej. "Local Pargua"
+
+  // Gobernanza: nivel N1–N6 calculado por umbral en UF (server-side)
+  approvalLevel  Int? // 1..6
+  approvalStatus ApprovalStatus @default(BORRADOR)
+
+  salesLines   SalesLine[] // ventas vinculadas a la iniciativa
+  expenseLines ExpenseLine[] // gastos vinculados a la iniciativa
+  approvals    ApprovalEvent[]
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([budgetId])
+}
+
+// ─────────────────────────────── Auditoría y parámetros ───────────────────────────────
+
+enum ApprovalAction {
+  ENVIADO
+  OBSERVADO
+  APROBADO
+  RECHAZADO
+  REABIERTO
+  CERRADO
+}
+
+model ApprovalEvent {
+  id          String         @id @default(cuid())
+  budgetId    String
+  budget      Budget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  capexItemId String? // si el evento es sobre un ítem CAPEX puntual
+  capexItem   CapexItem?     @relation(fields: [capexItemId], references: [id], onDelete: SetNull)
+  actorUserId String
+  actor       User           @relation(fields: [actorUserId], references: [id])
+  action      ApprovalAction
+  comment     String?
+  createdAt   DateTime       @default(now())
+
+  @@index([budgetId, createdAt])
+}
+
+model FxRate {
+  id          String  @id @default(cuid())
+  year        Int     @unique
+  ufToClp     Decimal @db.Decimal(12, 2) // ej. 39200.00
+  usdToClp    Decimal @db.Decimal(10, 2) // ej. 950.00
+  updatedById String?
+  updatedBy   User?   @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  updatedAt DateTime @updatedAt
+}
