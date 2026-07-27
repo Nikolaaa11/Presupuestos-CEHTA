@@ -7,6 +7,13 @@ import { prisma } from "@/lib/prisma";
 
 type Result = { ok: true } | { ok: false; error: string };
 
+/**
+ * Política de revalidación (rendimiento) — ver nota extensa en ventas/actions.ts.
+ * Medido: cada revalidatePath cuesta 7 queries y ~300 ms en producción. Las
+ * ediciones de celda y metadatos no revalidan (la grilla es optimista y revierte
+ * sola ante error); solo revalidan los cambios estructurales.
+ */
+
 function failure(error: unknown): Result {
   if (error instanceof ZodError) return { ok: false, error: error.issues[0]?.message ?? "Datos inválidos" };
   const safeMessages = [
@@ -70,7 +77,6 @@ export async function updateExpenseLineMeta(lineId: string, data: unknown): Prom
       if (!capex) throw new Error("La iniciativa no pertenece a este presupuesto");
     }
     await prisma.expenseLine.update({ where: { id: lineId }, data: parsed });
-    revalidatePath("/gastos");
     return { ok: true };
   } catch (error) {
     return failure(error);
@@ -84,7 +90,6 @@ export async function updateExpenseLineMonths(lineId: string, patch: unknown): P
     await requireEditableBudget(line.budgetId);
     const parsed = monthsPatchSchema.parse(patch);
     await prisma.expenseLine.update({ where: { id: lineId }, data: parsed });
-    revalidatePath("/gastos");
     return { ok: true };
   } catch (error) {
     return failure(error);
@@ -120,8 +125,7 @@ export async function bulkUpdateExpenseMonths(
     await prisma.$transaction(
       parsed.map((update) => prisma.expenseLine.update({ where: { id: update.lineId }, data: update.patch })),
     );
-    revalidatePath("/gastos");
-    return { ok: true };
+    return { ok: true }; // sin revalidar: UI optimista (ver nota arriba)
   } catch (error) {
     return failure(error);
   }

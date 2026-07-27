@@ -1,7 +1,7 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { BUDGET_YEAR, getCurrentBudget, isEditableStatus, resolveViewCompany } from "@/lib/budget";
-import { formatMoney, lineTotal, MONTH_KEYS, monthlyTotals, type MonthKey } from "@/lib/money";
+import { MONTH_KEYS, type MonthKey } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { ExpenseGrid } from "./expense-grid";
 import { startBudget } from "./actions";
@@ -53,10 +53,11 @@ export default async function GastosPage({
       const months = Object.fromEntries(
         MONTH_KEYS.map((key) => [key, line[key].toString()]),
       ) as Record<MonthKey, string>;
+      // El nombre de la categoría se resuelve en la grilla contra el catálogo:
+      // no se serializa por línea (payload RSC más liviano, una query menos).
       return {
         id: line.id,
         categoryId: line.categoryId,
-        categoryName: line.category.name,
         item: line.item,
         capexItemId: line.capexItemId,
         sortOrder: line.sortOrder,
@@ -67,20 +68,26 @@ export default async function GastosPage({
   const initiatives = budget.capexItems
     .filter((item) => item.isInitiative)
     .map((item) => ({ id: item.id, label: item.initiativeName ?? item.description }));
-  const total = lineTotal(monthlyTotals(lines));
   const editable = !readOnly && isEditableStatus(budget.status);
 
   return (
     <div className="space-y-5">
+      {/* El total anual lo muestra la grilla (vivo, sin revalidar por celda). */}
       <ModuleHeader title="Presupuesto de Gastos" companyName={company.name}>
         <div className="flex items-center gap-4">
           {user.role === "FUND_ADMIN" && <CompanySelector companies={companies} selectedCode={company.code} />}
           <StatusBadge status={budget.status} />
-          <div className="text-right"><p className="text-xs text-ink-soft">Total anual</p><p className="text-xl font-bold text-ink">{formatMoney(total, budget.currency)}</p></div>
         </div>
       </ModuleHeader>
       {!editable && <ReadOnlyBanner status={budget.status} />}
-      <ExpenseGrid budgetId={budget.id} lines={lines} categories={categories} initiatives={initiatives} editable={editable} />
+      <ExpenseGrid
+        budgetId={budget.id}
+        lines={lines}
+        categories={categories}
+        initiatives={initiatives}
+        editable={editable}
+        currency={budget.currency}
+      />
     </div>
   );
 }

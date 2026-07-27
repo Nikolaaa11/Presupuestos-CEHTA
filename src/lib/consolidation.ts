@@ -82,33 +82,75 @@ function pct(part: Decimal, total: Decimal): string {
   return part.div(total).times(100).toDecimalPlaces(1).toString();
 }
 
-export async function getFundConsolidation(year: number): Promise<FundConsolidation> {
-  const user = await requireUser();
-  if (user.role !== "FUND_ADMIN") throw new Error("Solo el fondo puede ver el consolidado");
-
-  const [companies, fxRow] = await Promise.all([
-    prisma.company.findMany({
-      orderBy: [{ type: "asc" }, { code: "asc" }],
-      include: {
-        budgets: {
-          where: { year },
-          orderBy: { version: "desc" },
-          take: 1,
-          include: {
-            salesLines: true,
-            expenseLines: true,
-            capexItems: { orderBy: [{ monthNeeded: "asc" }, { sortOrder: "asc" }] },
-          },
+/**
+ * Carga única de los presupuestos vigentes de todas las entidades del año.
+ *
+ * Rendimiento: es la ÚNICA lectura pesada del fondo. La comparten la vista
+ * consolidada y el export Excel; antes cada una hacía su propia consulta
+ * completa (11 queries y los mismos datos dos veces por descarga).
+ * Las líneas vienen ordenadas para que el export las use tal cual.
+ */
+export async function loadFundBudgets(year: number) {
+  return prisma.company.findMany({
+    orderBy: [{ type: "asc" }, { code: "asc" }],
+    include: {
+      budgets: {
+        where: { year },
+        orderBy: { version: "desc" },
+        take: 1,
+        include: {
+          salesLines: { orderBy: { sortOrder: "asc" } },
+          expenseLines: { orderBy: { sortOrder: "asc" } },
+          capexItems: { orderBy: [{ monthNeeded: "asc" }, { sortOrder: "asc" }] },
         },
       },
-    }),
-    prisma.fxRate.findUnique({ where: { year } }),
-  ]);
+    },
+  });
+}
 
-  const fx: Fx = fxRow
+export type FundCompanies = Awaited<ReturnType<typeof loadFundBudgets>>;
+
+async function requireFundAdminForConsolidation() {
+  const user = await requireUser();
+  if (user.role !== "FUND_ADMIN") throw new Error("Solo el fondo puede ver el consolidado");
+  return user;
+}
+
+async function loadFx(year: number): Promise<Fx> {
+  const fxRow = await prisma.fxRate.findUnique({ where: { year } });
+  return fxRow
     ? { ufToClp: fxRow.ufToClp.toString(), usdToClp: fxRow.usdToClp.toString() }
     : FX_FALLBACK;
+}
 
+/**
+ * Datos completos del fondo para el export: agregación + filas crudas, con UNA
+ * sola lectura. El catálogo de categorías se trae aparte (tabla de 6 filas) en
+ * vez de hacer un join por línea de gasto.
+ */
+export async function getFundExportData(year: number) {
+  await requireFundAdminForConsolidation();
+  const [companies, fx, categories] = await Promise.all([
+    loadFundBudgets(year),
+    loadFx(year),
+    prisma.expenseCategory.findMany({ select: { id: true, name: true } }),
+  ]);
+  return {
+    consolidation: aggregateFund(companies, fx, year),
+    companies,
+    fx,
+    categoryNames: new Map(categories.map((c) => [c.id, c.name])),
+  };
+}
+
+export async function getFundConsolidation(year: number): Promise<FundConsolidation> {
+  await requireFundAdminForConsolidation();
+  const [companies, fx] = await Promise.all([loadFundBudgets(year), loadFx(year)]);
+  return aggregateFund(companies, fx, year);
+}
+
+/** Agregación pura (sin E/S): se ejecuta una vez sobre los datos ya cargados. */
+function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundConsolidation {
   const zero = () =>
     Object.fromEntries(MONTH_KEYS.map((k) => [k, new Decimal(0)])) as Record<MonthKey, Decimal>;
 

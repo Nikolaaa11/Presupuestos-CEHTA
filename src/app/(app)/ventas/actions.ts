@@ -7,6 +7,21 @@ import { prisma } from "@/lib/prisma";
 
 type Result = { ok: true } | { ok: false; error: string };
 
+/**
+ * Política de revalidación (rendimiento).
+ *
+ * `revalidatePath` fuerza al servidor a re-renderizar la ruta y volver a
+ * consultar la base. Medido: 7 queries y ~300 ms de round-trip en producción
+ * POR CADA llamada. En las ediciones de celda y metadatos eso es trabajo puro
+ * desperdiciado: la grilla ya aplica el cambio de forma optimista y revierte
+ * sola si el action falla, y las rutas son dinámicas (`staleTimes.dynamic`
+ * apagado por defecto), así que al navegar se recarga fresco igualmente.
+ *
+ * Se revalida SOLO cuando cambia la estructura y el cliente necesita datos que
+ * únicamente el servidor conoce (el id de una línea nueva) o cuando el
+ * presupuesto pasa a existir.
+ */
+
 function failure(error: unknown): Result {
   if (error instanceof ZodError) return { ok: false, error: error.issues[0]?.message ?? "Datos inválidos" };
   const safeMessages = [
@@ -62,8 +77,7 @@ export async function updateSalesLineMeta(lineId: string, data: unknown): Promis
       if (!capex) throw new Error("La iniciativa no pertenece a este presupuesto");
     }
     await prisma.salesLine.update({ where: { id: lineId }, data: parsed });
-    revalidatePath("/ventas");
-    return { ok: true };
+    return { ok: true }; // sin revalidar: UI optimista (ver nota arriba)
   } catch (error) {
     return failure(error);
   }
@@ -76,8 +90,7 @@ export async function updateSalesLineMonths(lineId: string, patch: unknown): Pro
     await requireEditableBudget(line.budgetId);
     const parsed = monthsPatchSchema.parse(patch);
     await prisma.salesLine.update({ where: { id: lineId }, data: parsed });
-    revalidatePath("/ventas");
-    return { ok: true };
+    return { ok: true }; // sin revalidar: UI optimista (ver nota arriba)
   } catch (error) {
     return failure(error);
   }
@@ -112,8 +125,7 @@ export async function bulkUpdateSalesMonths(
     await prisma.$transaction(
       parsed.map((update) => prisma.salesLine.update({ where: { id: update.lineId }, data: update.patch })),
     );
-    revalidatePath("/ventas");
-    return { ok: true };
+    return { ok: true }; // sin revalidar: UI optimista (ver nota arriba)
   } catch (error) {
     return failure(error);
   }

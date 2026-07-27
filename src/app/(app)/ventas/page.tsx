@@ -1,7 +1,7 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { BUDGET_YEAR, getCurrentBudget, isEditableStatus, resolveViewCompany } from "@/lib/budget";
-import { formatMoney, lineTotal, MONTH_KEYS, monthlyTotals, type MonthKey } from "@/lib/money";
+import { MONTH_KEYS, type MonthKey } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import { startBudget } from "./actions";
 import { SalesGrid } from "./sales-grid";
@@ -62,20 +62,26 @@ export default async function VentasPage({
   const initiatives = budget.capexItems
     .filter((item) => item.isInitiative)
     .map((item) => ({ id: item.id, label: item.initiativeName ?? item.description }));
-  const total = lineTotal(monthlyTotals(lines));
   const editable = !readOnly && isEditableStatus(budget.status);
 
   return (
     <div className="space-y-5">
+      {/* El total anual lo muestra la grilla: así se mantiene vivo con cada
+          edición sin pagar una revalidación de ruta por celda. */}
       <ModuleHeader title="Presupuesto de Ventas" companyName={company.name}>
         <div className="flex items-center gap-4">
           {user.role === "FUND_ADMIN" && <CompanySelector companies={companies} selectedCode={company.code} />}
           <StatusBadge status={budget.status} />
-          <div className="text-right"><p className="text-xs text-ink-soft">Total anual</p><p className="text-xl font-bold text-ink">{formatMoney(total, budget.currency)}</p></div>
         </div>
       </ModuleHeader>
       {!editable && <ReadOnlyBanner status={budget.status} />}
-      <SalesGrid budgetId={budget.id} lines={lines} initiatives={initiatives} editable={editable} />
+      <SalesGrid
+        budgetId={budget.id}
+        lines={lines}
+        initiatives={initiatives}
+        editable={editable}
+        currency={budget.currency}
+      />
     </div>
   );
 }

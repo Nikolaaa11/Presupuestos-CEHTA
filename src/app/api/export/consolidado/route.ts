@@ -1,8 +1,7 @@
 import * as XLSX from "xlsx";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
-import { getFundConsolidation } from "@/lib/consolidation";
-import { MONTH_KEYS, MONTH_LABELS, lineTotal, toClp, type CurrencyCode, type Fx } from "@/lib/money";
+import { getFundExportData } from "@/lib/consolidation";
+import { MONTH_KEYS, MONTH_LABELS, lineTotal, toClp, type CurrencyCode } from "@/lib/money";
 
 /**
  * Export Excel del consolidado del fondo — SOLO FUND_ADMIN.
@@ -22,7 +21,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const year = Number(url.searchParams.get("año") ?? url.searchParams.get("year") ?? YEAR_DEFAULT) || YEAR_DEFAULT;
 
-  const c = await getFundConsolidation(year);
+  // Una sola lectura del fondo alimenta el consolidado Y el detalle por empresa.
+  const { consolidation: c, companies, fx, categoryNames } = await getFundExportData(year);
   const wb = XLSX.utils.book_new();
 
   // ── Hoja 1: Resumen ─────────────────────────────────────────────
@@ -71,24 +71,7 @@ export async function GET(request: Request) {
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(capex), "CAPEX");
 
-  // ── Una hoja por empresa con detalle de líneas ──────────────────
-  const fx: Fx = { ufToClp: c.fx.ufToClp, usdToClp: c.fx.usdToClp };
-  const companies = await prisma.company.findMany({
-    orderBy: [{ type: "asc" }, { code: "asc" }],
-    include: {
-      budgets: {
-        where: { year },
-        orderBy: { version: "desc" },
-        take: 1,
-        include: {
-          salesLines: { orderBy: { sortOrder: "asc" } },
-          expenseLines: { orderBy: { sortOrder: "asc" }, include: { category: true } },
-          capexItems: { orderBy: { sortOrder: "asc" } },
-        },
-      },
-    },
-  });
-
+  // ── Una hoja por empresa con detalle de líneas (datos ya cargados) ──
   for (const company of companies) {
     const budget = company.budgets[0];
     const sheet: (string | number)[][] = [
@@ -109,7 +92,7 @@ export async function GET(request: Request) {
       sheet.push(["GASTOS", "Categoría", "", ...MONTH_HDR, "Total"]);
       for (const l of budget.expenseLines) {
         sheet.push([
-          l.item, l.category.name, "",
+          l.item, categoryNames.get(l.categoryId) ?? "Sin categoría", "",
           ...MONTH_KEYS.map((k) => Number(l[k].toString())),
           Number(lineTotal(l).toString()),
         ]);

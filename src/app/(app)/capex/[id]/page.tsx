@@ -25,14 +25,20 @@ export default async function BankableCasePage({
   const { id } = await params;
   const user = await requireUser();
 
-  const item = await prisma.capexItem.findUnique({
-    where: { id },
-    include: {
-      budget: { include: { company: true } },
-      salesLines: { orderBy: { sortOrder: "asc" } },
-      expenseLines: { orderBy: { sortOrder: "asc" } },
-    },
-  });
+  // Rendimiento: la tabla de tipos de cambio tiene una fila por año, así que se
+  // trae completa EN PARALELO con el ítem en vez de esperar a conocer su año
+  // (encadenar las dos consultas costaba un round-trip extra a la base).
+  const [item, fxRates] = await Promise.all([
+    prisma.capexItem.findUnique({
+      where: { id },
+      include: {
+        budget: { include: { company: { select: { name: true } } } },
+        salesLines: { orderBy: { sortOrder: "asc" } },
+        expenseLines: { orderBy: { sortOrder: "asc" } },
+      },
+    }),
+    prisma.fxRate.findMany(),
+  ]);
   if (!item) notFound();
 
   // Manager: solo su empresa. Admin: todas (lectura).
@@ -40,7 +46,7 @@ export default async function BankableCasePage({
     redirect("/capex");
   }
 
-  const fxRow = await prisma.fxRate.findUnique({ where: { year: item.budget.year } });
+  const fxRow = fxRates.find((r) => r.year === item.budget.year);
   const fx: Fx = fxRow
     ? { ufToClp: fxRow.ufToClp.toString(), usdToClp: fxRow.usdToClp.toString() }
     : FX_FALLBACK;

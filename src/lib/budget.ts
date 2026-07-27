@@ -53,14 +53,22 @@ export async function resolveViewCompany(requestedCode?: string | null) {
   return { user, company, readOnly: true as const };
 }
 
-/** Presupuesto vigente (mayor versión) de la empresa para el año. */
+/**
+ * Presupuesto vigente (mayor versión) de la empresa para el año.
+ *
+ * Rendimiento: NO se incluyen las relaciones `capexItem` ni `category` de las
+ * líneas. Prisma emite una query por relación incluida; esas tres costaban 3 de
+ * las 7 queries por carga de página y sus datos nunca se leían (las vistas usan
+ * `capexItemId` y resuelven el nombre de categoría contra el catálogo, que ya
+ * viaja aparte). 7 → 4 queries por carga.
+ */
 export async function getCurrentBudget(companyId: string, year = BUDGET_YEAR) {
   return prisma.budget.findFirst({
     where: { companyId, year },
     orderBy: { version: "desc" },
     include: {
-      salesLines: { orderBy: { sortOrder: "asc" }, include: { capexItem: { select: { id: true, initiativeName: true, description: true } } } },
-      expenseLines: { orderBy: { sortOrder: "asc" }, include: { category: true, capexItem: { select: { id: true, initiativeName: true, description: true } } } },
+      salesLines: { orderBy: { sortOrder: "asc" } },
+      expenseLines: { orderBy: { sortOrder: "asc" } },
       capexItems: { orderBy: { sortOrder: "asc" } },
     },
   });

@@ -2,26 +2,57 @@
 
 import {
   Fragment,
-  type ClipboardEvent,
-  type KeyboardEvent,
-  type ReactNode,
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   useTransition,
+  type ClipboardEvent,
+  type KeyboardEvent,
+  type ReactNode,
 } from "react";
-import { formatCell, lineTotal, MONTH_KEYS, MONTH_LABELS, monthlyTotals, type MonthKey } from "@/lib/money";
+import {
+  formatCell,
+  formatMoney,
+  lineTotal,
+  MONTH_KEYS,
+  MONTH_LABELS,
+  monthlyTotals,
+  type CurrencyCode,
+  type MonthKey,
+} from "@/lib/money";
 import type { ActionResult, GridLine, MonthPatch } from "./types";
+
+/**
+ * Grilla de montos mes a mes.
+ *
+ * Notas de rendimiento (medidas, no supuestas):
+ *  - Cada fila es un componente memoizado: al confirmar una celda solo se
+ *    re-renderiza esa fila, no las 12 celdas × N filas de toda la tabla.
+ *    Para que la memoización sirva, TODOS los callbacks que bajan a la fila son
+ *    estables (no dependen de `lines`): el valor anterior para el rollback lo
+ *    aporta la propia fila, que ya lo tiene.
+ *  - Los subtotales por categoría se calculan en UNA pasada memoizada por
+ *    cambio de datos, no con un filter+suma por cada fila de subtotal en cada
+ *    render.
+ *  - El índice de fila viaja como prop en vez de resolverse con findIndex
+ *    dentro del map (eso era O(n²)).
+ *  - El total anual se muestra acá y no en el servidor: así queda vivo sin
+ *    pagar una revalidación de ruta por cada celda editada.
+ */
 
 type Props<T extends GridLine> = {
   budgetId: string;
   lines: T[];
   editable: boolean;
+  currency: CurrencyCode;
   metadataHeaders: string[];
   renderMetadata: (
     line: T,
-    update: <K extends keyof T>(key: K, value: T[K]) => Promise<void>,
+    rowIndex: number,
+    update: <K extends keyof T>(key: K, value: T[K]) => void,
     disabled: boolean,
   ) => ReactNode;
   updateMeta: (lineId: string, data: Record<string, unknown>) => Promise<ActionResult>;
@@ -49,7 +80,9 @@ function normalizeAmount(value: string): string | null {
   return /^\d{1,12}(\.\d{1,2})?$/.test(normalized) ? normalized : null;
 }
 
-function MoneyInput({
+// ─────────────────────────────── Celda ───────────────────────────────
+
+const MoneyInput = memo(function MoneyInput({
   value,
   disabled,
   rowIndex,
@@ -61,13 +94,13 @@ function MoneyInput({
   disabled: boolean;
   rowIndex: number;
   monthIndex: number;
-  onCommit: (value: string) => Promise<void>;
-  onPaste: (event: ClipboardEvent<HTMLInputElement>) => void;
+  onCommit: (next: string, previous: string) => void;
+  onPaste: (event: ClipboardEvent<HTMLInputElement>, rowIndex: number, monthIndex: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
 
-  async function commit() {
+  function commit() {
     setEditing(false);
     const normalized = normalizeAmount(draft);
     if (normalized === null) {
@@ -75,17 +108,16 @@ function MoneyInput({
       return;
     }
     setDraft(normalized);
-    if (normalized !== value) await onCommit(normalized);
+    if (normalized !== value) onCommit(normalized, value);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter") {
       event.preventDefault();
-      void commit().then(() => {
-        document
-          .querySelector<HTMLInputElement>(`[data-money-cell="${rowIndex + 1}-${monthIndex}"]`)
-          ?.focus();
-      });
+      commit();
+      document
+        .querySelector<HTMLInputElement>(`[data-money-cell="${rowIndex + 1}-${monthIndex}"]`)
+        ?.focus();
     }
     if (event.key === "Escape") {
       setDraft(value);
@@ -106,18 +138,89 @@ function MoneyInput({
         setEditing(true);
       }}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => void commit()}
+      onBlur={commit}
       onKeyDown={handleKeyDown}
-      onPaste={onPaste}
+      onPaste={(event) => onPaste(event, rowIndex, monthIndex)}
       className="cell-num h-9 w-24 rounded border border-transparent bg-transparent px-2 text-sm text-ink outline-none enabled:hover:border-line enabled:focus:border-brand enabled:focus:bg-white disabled:cursor-default"
     />
   );
+});
+
+// ─────────────────────────────── Fila ───────────────────────────────
+
+type RowProps<T extends GridLine> = {
+  line: T;
+  rowIndex: number;
+  editable: boolean;
+  renderMetadata: Props<T>["renderMetadata"];
+  onCommitMonth: (lineId: string, key: MonthKey, next: string, previous: string) => void;
+  onCommitMeta: <K extends keyof T>(lineId: string, key: K, value: T[K], previous: T[K]) => void;
+  onDelete: (line: T) => void;
+  onPaste: (event: ClipboardEvent<HTMLInputElement>, rowIndex: number, monthIndex: number) => void;
+};
+
+function GridRowInner<T extends GridLine>({
+  line,
+  rowIndex,
+  editable,
+  renderMetadata,
+  onCommitMonth,
+  onCommitMeta,
+  onDelete,
+  onPaste,
+}: RowProps<T>) {
+  // Total de la fila: se recalcula solo cuando cambia ESTA fila (memo del componente).
+  const total = lineTotal(line);
+
+  const updateMeta = useCallback(
+    <K extends keyof T>(key: K, value: T[K]) => onCommitMeta(line.id, key, value, line[key]),
+    [line, onCommitMeta],
+  );
+
+  return (
+    <tr className="border-b border-line/70 hover:bg-soft/60">
+      {renderMetadata(line, rowIndex, updateMeta, !editable)}
+      {MONTH_KEYS.map((month, monthIndex) => (
+        <td key={month} className="px-1 py-1">
+          <MoneyInput
+            value={line[month]}
+            disabled={!editable}
+            rowIndex={rowIndex}
+            monthIndex={monthIndex}
+            onCommit={(next, previous) => onCommitMonth(line.id, month, next, previous)}
+            onPaste={onPaste}
+          />
+        </td>
+      ))}
+      <td className="cell-num border-l border-line bg-soft/50 px-3 py-2 text-sm font-semibold text-ink">
+        {formatCell(total)}
+      </td>
+      <td className="px-2 text-center">
+        {editable && (
+          <button
+            type="button"
+            aria-label={`Eliminar línea ${rowIndex + 1}`}
+            title="Eliminar línea"
+            onClick={() => onDelete(line)}
+            className="rounded p-1.5 text-ink-soft hover:bg-danger-bg hover:text-danger"
+          >
+            ×
+          </button>
+        )}
+      </td>
+    </tr>
+  );
 }
+
+const GridRow = memo(GridRowInner) as typeof GridRowInner;
+
+// ─────────────────────────────── Grilla ───────────────────────────────
 
 export function AmountGrid<T extends GridLine>({
   budgetId,
   lines: initialLines,
   editable,
+  currency,
   metadataHeaders,
   renderMetadata,
   updateMeta,
@@ -140,6 +243,14 @@ export function AmountGrid<T extends GridLine>({
     setSourceLines(initialLines);
     setLines(initialLines);
   }
+
+  // Espejo de `lines` para los handlers que necesitan el estado actual sin
+  // depender de él (así siguen siendo estables y la memoización de filas vive).
+  const linesRef = useRef(lines);
+  useEffect(() => {
+    linesRef.current = lines;
+  }, [lines]);
+
   useEffect(() => {
     if (initialLines.length > previousLength.current) {
       document.querySelector<HTMLInputElement>(`[data-meta-row="${initialLines.length - 1}"]`)?.focus();
@@ -147,16 +258,7 @@ export function AmountGrid<T extends GridLine>({
     previousLength.current = initialLines.length;
   }, [initialLines.length]);
 
-  const totals = useMemo(() => monthlyTotals(lines), [lines]);
-  const grandTotal = useMemo(() => lineTotal(totals), [totals]);
-  const displayedLines = useMemo(
-    () => groupKey
-      ? [...lines].sort((left, right) => groupKey(left).localeCompare(groupKey(right)))
-      : lines,
-    [groupKey, lines],
-  );
-
-  async function run(action: () => Promise<ActionResult>, rollback?: () => void) {
+  const run = useCallback(async (action: () => Promise<ActionResult>, rollback?: () => void) => {
     setPendingCount((count) => count + 1);
     setMessage(null);
     try {
@@ -171,67 +273,137 @@ export function AmountGrid<T extends GridLine>({
     } finally {
       setPendingCount((count) => count - 1);
     }
-  }
+  }, []);
 
-  async function commitMonth(lineId: string, key: MonthKey, value: string) {
-    const previous = lines.find((line) => line.id === lineId)?.[key] ?? "0";
-    setLines((current) => current.map((line) => (line.id === lineId ? { ...line, [key]: value } : line)));
-    await run(
-      () => updateMonths(lineId, { [key]: value }),
-      () => setLines((current) => current.map((line) => (line.id === lineId ? { ...line, [key]: previous } : line))),
-    );
-  }
+  const patchLine = useCallback((lineId: string, patch: Partial<T>) => {
+    setLines((current) => current.map((line) => (line.id === lineId ? { ...line, ...patch } : line)));
+  }, []);
 
-  async function commitMeta<K extends keyof T>(lineId: string, key: K, value: T[K]) {
-    const previous = lines.find((line) => line.id === lineId)?.[key];
-    setLines((current) => current.map((line) => (line.id === lineId ? { ...line, [key]: value } : line)));
-    await run(
-      () => updateMeta(lineId, { [key]: value }),
-      () => {
-        if (previous !== undefined) {
-          setLines((current) => current.map((line) => (line.id === lineId ? { ...line, [key]: previous } : line)));
-        }
-      },
-    );
-  }
+  const onCommitMonth = useCallback(
+    (lineId: string, key: MonthKey, next: string, previous: string) => {
+      patchLine(lineId, { [key]: next } as unknown as Partial<T>);
+      void run(
+        () => updateMonths(lineId, { [key]: next }),
+        () => patchLine(lineId, { [key]: previous } as unknown as Partial<T>),
+      );
+    },
+    [patchLine, run, updateMonths],
+  );
 
-  function pasteBlock(event: ClipboardEvent<HTMLInputElement>, anchorRow: number, anchorMonth: number) {
-    if (!editable) return;
-    const rows = event.clipboardData.getData("text").replace(/\r/g, "").split("\n").filter((row) => row !== "");
-    if (rows.length === 0) return;
-    event.preventDefault();
-    const updates = new Map<string, MonthPatch>();
-    const next = displayedLines.map((line) => ({ ...line }));
-    rows.forEach((row, rowOffset) => {
-      const target = next[anchorRow + rowOffset];
-      if (!target) return;
-      row.split("\t").forEach((cell, colOffset) => {
-        const key = MONTH_KEYS[anchorMonth + colOffset];
-        const value = normalizeAmount(cell);
-        if (!key || value === null) return;
-        target[key] = value;
-        updates.set(target.id, { ...(updates.get(target.id) ?? {}), [key]: value });
+  const onCommitMeta = useCallback(
+    <K extends keyof T>(lineId: string, key: K, value: T[K], previous: T[K]) => {
+      patchLine(lineId, { [key]: value } as unknown as Partial<T>);
+      void run(
+        () => updateMeta(lineId, { [key]: value } as Record<string, unknown>),
+        () => patchLine(lineId, { [key]: previous } as unknown as Partial<T>),
+      );
+    },
+    [patchLine, run, updateMeta],
+  );
+
+  const onDelete = useCallback(
+    (line: T) => {
+      if (!window.confirm("¿Eliminar esta línea? Esta acción no se puede deshacer.")) return;
+      const snapshot = linesRef.current;
+      setLines((current) => current.filter((item) => item.id !== line.id));
+      void run(() => deleteLine(line.id), () => setLines(snapshot));
+    },
+    [deleteLine, run],
+  );
+
+  // Orden de presentación: agrupado por categoría cuando corresponde.
+  const displayedLines = useMemo(() => {
+    if (!groupKey) return lines;
+    return [...lines].sort((left, right) => groupKey(left).localeCompare(groupKey(right)));
+  }, [groupKey, lines]);
+
+  const onPaste = useCallback(
+    (event: ClipboardEvent<HTMLInputElement>, anchorRow: number, anchorMonth: number) => {
+      if (!editable) return;
+      const rows = event.clipboardData
+        .getData("text")
+        .replace(/\r/g, "")
+        .split("\n")
+        .filter((row) => row !== "");
+      if (rows.length === 0) return;
+      event.preventDefault();
+
+      const current = linesRef.current;
+      const ordered = groupKey
+        ? [...current].sort((l, r) => groupKey(l).localeCompare(groupKey(r)))
+        : current;
+
+      const updates = new Map<string, MonthPatch>();
+      const patched = new Map<string, Partial<T>>();
+      rows.forEach((row, rowOffset) => {
+        const target = ordered[anchorRow + rowOffset];
+        if (!target) return;
+        row.split("\t").forEach((cell, colOffset) => {
+          const key = MONTH_KEYS[anchorMonth + colOffset];
+          const value = normalizeAmount(cell);
+          if (!key || value === null) return;
+          updates.set(target.id, { ...(updates.get(target.id) ?? {}), [key]: value });
+          patched.set(target.id, { ...(patched.get(target.id) ?? {}), [key]: value } as Partial<T>);
+        });
       });
-    });
-    if (updates.size === 0) return;
-    const previous = lines;
-    setLines(next);
-    void run(
-      () => bulkUpdate(budgetId, [...updates].map(([lineId, patch]) => ({ lineId, patch }))),
-      () => setLines(previous),
-    );
-  }
+      if (updates.size === 0) return;
 
-  const categoryTotals = (key: string) => monthlyTotals(lines.filter((line) => groupKey?.(line) === key));
+      const snapshot = current;
+      setLines((prev) => prev.map((line) => (patched.has(line.id) ? { ...line, ...patched.get(line.id)! } : line)));
+      void run(
+        () => bulkUpdate(budgetId, [...updates].map(([lineId, patch]) => ({ lineId, patch }))),
+        () => setLines(snapshot),
+      );
+    },
+    [budgetId, bulkUpdate, editable, groupKey, run],
+  );
+
+  // Totales del pie y total anual: una pasada por cambio de datos.
+  const totals = useMemo(() => monthlyTotals(lines), [lines]);
+  const grandTotal = useMemo(() => lineTotal(totals), [totals]);
+
+  // Subtotales por categoría: UNA pasada agrupando, en vez de filtrar y sumar
+  // de nuevo por cada fila de subtotal en cada render.
+  const groupTotals = useMemo(() => {
+    if (!groupKey) return null;
+    const byGroup = new Map<string, T[]>();
+    for (const line of lines) {
+      const key = groupKey(line);
+      const bucket = byGroup.get(key);
+      if (bucket) bucket.push(line);
+      else byGroup.set(key, [line]);
+    }
+    return new Map(
+      [...byGroup].map(([key, groupLines]) => {
+        const monthly = monthlyTotals(groupLines);
+        return [key, { monthly, total: lineTotal(monthly) }];
+      }),
+    );
+  }, [groupKey, lines]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-line bg-white shadow-sm">
-      <div className="flex min-h-11 items-center justify-between border-b border-line px-4 py-2">
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2">
         <p className="text-xs text-ink-soft">
-          {pendingCount > 0 ? "Guardando…" : message ? <span className="text-danger">Error: {message}</span> : "Guardado ✓"}
+          {pendingCount > 0 ? (
+            "Guardando…"
+          ) : message ? (
+            <span className="text-danger">Error: {message}</span>
+          ) : (
+            "Guardado ✓"
+          )}
         </p>
-        <p className="text-xs text-ink-soft">Puedes pegar bloques desde Excel en cualquier mes.</p>
+        <div className="flex items-center gap-4">
+          <p className="hidden text-xs text-ink-soft sm:block">
+            Puedes pegar bloques desde Excel en cualquier mes.
+          </p>
+          <p className="text-sm">
+            <span className="text-xs text-ink-soft">Total anual </span>
+            <strong className="text-ink">{formatMoney(grandTotal, currency)}</strong>
+          </p>
+        </div>
       </div>
+
       <div className="overflow-x-auto">
         <table className="min-w-max border-collapse text-left">
           <thead className="bg-soft text-xs font-semibold uppercase tracking-wide text-ink-soft">
@@ -250,60 +422,37 @@ export function AmountGrid<T extends GridLine>({
           </thead>
           <tbody>
             {displayedLines.length === 0 && (
-              <tr><td colSpan={metadataHeaders.length + 14} className="px-6 py-12 text-center text-sm text-ink-soft">{emptyLabel}</td></tr>
+              <tr>
+                <td colSpan={metadataHeaders.length + 14} className="px-6 py-12 text-center text-sm text-ink-soft">
+                  {emptyLabel}
+                </td>
+              </tr>
             )}
             {displayedLines.map((line, rowIndex) => {
               const key = groupKey?.(line);
               const nextKey = displayedLines[rowIndex + 1] ? groupKey?.(displayedLines[rowIndex + 1]) : undefined;
+              const subtotal = key ? groupTotals?.get(key) : undefined;
               return (
                 <Fragment key={line.id}>
-                  <tr className="border-b border-line/70 hover:bg-soft/60">
-                    {renderMetadata(
-                      line,
-                      (field, value) => commitMeta(line.id, field, value),
-                      !editable,
-                    )}
-                    {MONTH_KEYS.map((month, monthIndex) => (
-                      <td key={month} className="px-1 py-1">
-                        <MoneyInput
-                          value={line[month]}
-                          disabled={!editable}
-                          rowIndex={rowIndex}
-                          monthIndex={monthIndex}
-                          onCommit={(value) => commitMonth(line.id, month, value)}
-                          onPaste={(event) => pasteBlock(event, rowIndex, monthIndex)}
-                        />
-                      </td>
-                    ))}
-                    <td className="cell-num border-l border-line bg-soft/50 px-3 py-2 text-sm font-semibold text-ink">
-                      {formatCell(lineTotal(line))}
-                    </td>
-                    <td className="px-2 text-center">
-                      {editable && (
-                        <button
-                          type="button"
-                          aria-label="Eliminar línea"
-                          title="Eliminar línea"
-                          onClick={() => {
-                            if (!window.confirm("¿Eliminar esta línea? Esta acción no se puede deshacer.")) return;
-                            const previous = lines;
-                            setLines((current) => current.filter((item) => item.id !== line.id));
-                            void run(() => deleteLine(line.id), () => setLines(previous));
-                          }}
-                          className="rounded p-1.5 text-ink-soft hover:bg-danger-bg hover:text-danger"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                  {key && key !== nextKey && (
+                  <GridRow
+                    line={line}
+                    rowIndex={rowIndex}
+                    editable={editable}
+                    renderMetadata={renderMetadata}
+                    onCommitMonth={onCommitMonth}
+                    onCommitMeta={onCommitMeta}
+                    onDelete={onDelete}
+                    onPaste={onPaste}
+                  />
+                  {key && key !== nextKey && subtotal && (
                     <tr className="border-b border-line bg-lavender-bg/50 text-xs font-semibold text-brand-dark">
-                      <td colSpan={metadataHeaders.length} className="px-3 py-2">Subtotal {groupLabel?.(line) ?? key}</td>
+                      <td colSpan={metadataHeaders.length} className="px-3 py-2">
+                        Subtotal {groupLabel?.(line) ?? key}
+                      </td>
                       {MONTH_KEYS.map((month) => (
-                        <td key={month} className="cell-num px-3 py-2">{formatCell(categoryTotals(key)[month])}</td>
+                        <td key={month} className="cell-num px-3 py-2">{formatCell(subtotal.monthly[month])}</td>
                       ))}
-                      <td className="cell-num border-l border-line px-3 py-2">{formatCell(lineTotal(categoryTotals(key)))}</td>
+                      <td className="cell-num border-l border-line px-3 py-2">{formatCell(subtotal.total)}</td>
                       <td />
                     </tr>
                   )}
@@ -314,13 +463,16 @@ export function AmountGrid<T extends GridLine>({
           <tfoot className="bg-brand-dark text-white">
             <tr>
               <th colSpan={metadataHeaders.length} className="px-3 py-3 text-sm">Total anual</th>
-              {MONTH_KEYS.map((key) => <td key={key} className="cell-num px-3 py-3 text-sm font-semibold">{formatCell(totals[key])}</td>)}
+              {MONTH_KEYS.map((key) => (
+                <td key={key} className="cell-num px-3 py-3 text-sm font-semibold">{formatCell(totals[key])}</td>
+              ))}
               <td className="cell-num border-l border-white/20 px-3 py-3 text-sm font-bold">{formatCell(grandTotal)}</td>
               <td />
             </tr>
           </tfoot>
         </table>
       </div>
+
       {editable && (
         <div className="border-t border-line p-4">
           <button

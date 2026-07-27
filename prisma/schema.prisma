@@ -132,6 +132,9 @@ model SalesLine {
   updatedAt DateTime @updatedAt
 
   @@index([budgetId])
+  // El caso bancable consulta las líneas por iniciativa; sin este índice
+  // Postgres hace scan secuencial (las FK no se indexan solas).
+  @@index([capexItemId])
 }
 
 // ─────────────────────────────── Gastos ───────────────────────────────
@@ -173,6 +176,8 @@ model ExpenseLine {
   updatedAt DateTime @updatedAt
 
   @@index([budgetId])
+  @@index([capexItemId]) // caso bancable: gastos de la iniciativa
+  @@index([categoryId])  // conteo por categoría y verificación de la FK al borrar
 }
 
 // ─────────────────────────────── CAPEX ───────────────────────────────
