@@ -28,7 +28,7 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-60 shrink-0 flex-col bg-brand-dark px-4 py-6">
+      <aside className="flex w-60 shrink-0 flex-col bg-brand-dark px-4 py-6 print:hidden">
         <div className="mb-8 px-2">
           <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-lavender">
             Cehta Capital
@@ -57,7 +57,7 @@ export default async function AppLayout({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-line bg-white px-8 py-4">
+        <header className="flex items-center justify-between border-b border-line bg-white px-8 py-4 print:hidden">
           <div className="flex items-center gap-3">
             <span className="rounded-full bg-lavender-bg px-3 py-1 text-xs font-semibold text-brand">
               {isAdmin ? "Vista fondo" : user.companyCode}
@@ -67,7 +67,7 @@ export default async function AppLayout({
             </span>
           </div>
         </header>
-        <main className="flex-1 bg-soft px-8 py-8">{children}</main>
+        <main className="flex-1 bg-soft px-8 py-8 print:bg-white print:px-0 print:py-0">{children}</main>
       </div>
     </div>
   );
