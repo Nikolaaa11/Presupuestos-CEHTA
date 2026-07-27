@@ -128,7 +128,7 @@ async function main() {
   });
 
   // CAPEX primero (las ventas/gastos de la iniciativa se vinculan a él)
-  const camioneta = await prisma.capexItem.create({
+  await prisma.capexItem.create({
     data: {
       budgetId: cenergyBudget.id,
       description: "Camioneta 4x4 para trabajo en terreno",

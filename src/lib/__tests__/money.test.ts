@@ -29,6 +29,10 @@ describe("dinero — precisión Decimal", () => {
     expect(monthlyFlow(ventas, gastos).m01.toString()).toBe("1800000");
   });
 
+  it("lineTotal rechaza arrays (error de uso: corresponde monthlyTotals)", () => {
+    expect(() => lineTotal([{ m01: "1" }] as never)).toThrow(/monthlyTotals/);
+  });
+
   it("acepta objetos Decimal de Prisma (duck-typed por toString)", () => {
     const prismaLike = { toString: () => "1234.56" };
     expect(dec(prismaLike).toString()).toBe("1234.56");

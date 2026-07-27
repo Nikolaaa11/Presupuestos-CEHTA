@@ -26,8 +26,11 @@ export const MONTH_LABELS: Record<MonthKey, string> = {
 
 export type MonthlyRecord = Partial<Record<MonthKey, DecimalInput>>;
 
-/** Total anual de una línea (suma de los 12 meses). */
+/** Total anual de una línea (suma de los 12 meses). Para varias líneas: monthlyTotals + lineTotal. */
 export function lineTotal(line: MonthlyRecord): Decimal {
+  if (Array.isArray(line)) {
+    throw new Error("lineTotal recibe UNA línea — para un arreglo usá lineTotal(monthlyTotals(lines))");
+  }
   return MONTH_KEYS.reduce(
     (acc, k) => acc.plus(line[k] === undefined || line[k] === null ? 0 : dec(line[k]!)),
     new Decimal(0),
