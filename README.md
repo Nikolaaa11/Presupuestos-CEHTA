@@ -1,5 +1,7 @@
 # Presupuestos CEHTA
 
+**🟢 En producción:** https://presupuestos-cehta-nicolasrietta-1798s-projects.vercel.app (deploy automático desde `main`)
+
 Plataforma de presupuestos anuales del fondo **CEHTA Capital** (FIP CEHTA ESG / AFIS S.A.). Cada entidad del fondo carga su presupuesto del año **mes a mes** en tres módulos — **Ventas**, **Gastos** y **CAPEX** — y el fondo consolida, revisa y aprueba todo el portafolio.
 
 > *"Así como tenemos una plataforma para meter el voucher de los gastos, necesitamos una plataforma donde los gerentes puedan entrar y cargar todo esto... y con este flujo, ir al banco y decirle: finánciame a 18 meses."* — mandato del directorio, jul-2026
