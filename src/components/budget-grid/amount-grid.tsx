@@ -273,7 +273,15 @@ export function AmountGrid<T extends GridLine>({
   groupKey,
   groupLabel,
 }: Props<T>) {
-  const [view, setView] = useState<GridView>("presupuesto");
+  /**
+   * Vista inicial: si el presupuesto viene vacío pero hay ejecución cargada
+   * (pasa con los años donde el Excel solo registró el REAL), se abre en "real"
+   * para que los datos se vean, en vez de mostrar una grilla en cero.
+   */
+  const [view, setView] = useState<GridView>(() => {
+    const conPresupuesto = initialLines.some((l) => MONTH_KEYS.some((k) => Number(l[k] ?? 0) !== 0));
+    return !conPresupuesto && hasRealData(initialLines) ? "real" : "presupuesto";
+  });
   const [lines, setLines] = useState(initialLines);
   const [sourceLines, setSourceLines] = useState(initialLines);
   const [message, setMessage] = useState<string | null>(null);

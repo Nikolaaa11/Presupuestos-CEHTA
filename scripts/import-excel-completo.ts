@@ -236,18 +236,36 @@ async function importProgramas() {
     });
   };
 
-  // Prog1: cartera de proyectos (MW y UF) + boletas de garantía
+  // Filas que son subtotales del Excel: importarlas duplicaría los montos.
+  const esTotal = (s: string) => /^total|^sub ?total|^suma\b/i.test(s.trim());
+  // Topes de sensatez: una capacidad de planta no pasa de 1.000 MW y un ítem en
+  // UF del fondo no llega a UF 100.000 (≈ CLP 3.900 millones). Sin esto, una
+  // boleta de garantía EN PESOS se colaba como si fuera UF (bug detectado:
+  // "Boleta La Ligua" 54.305.090 → se leía UF y daba CLP 2,1 billones).
+  const MW_MAX = 1000;
+  const UF_MAX = 100_000;
+
+  // Prog1: primero la cartera de proyectos (ÍTEM numérico + MW + UF), después
+  // las boletas y terrenos, que van en PESOS.
   const p1 = rowsOf(BANCOS, "Prog1");
   for (let i = 2; i < p1.length; i++) {
     const proyecto = text(p1[i]?.[1]);
+    if (!proyecto || esTotal(proyecto)) continue;
+    const item = num(p1[i]?.[2]);
     const mw = num(p1[i]?.[4]);
     const uf = num(p1[i]?.[5]);
-    if (proyecto && mw > 0 && uf > 0) {
-      await add(`Proyecto ${proyecto} — ${mw} MW`, uf, "UF", `Cartera de proyectos: ${mw} MW a UF ${uf}`);
+
+    const esCartera =
+      Number.isInteger(item) && item >= 1 && item <= 20 && mw > 0 && mw <= MW_MAX && uf > 0 && uf <= UF_MAX;
+    if (esCartera) {
+      await add(`Cartera — ${proyecto} (${mw} MW)`, uf, "UF", `Proyecto de la cartera: ${mw} MW, UF ${uf}`);
+      continue;
     }
-    // Boletas y devoluciones (columna 4 = pesos)
-    if (/^Boleta|^Devolución/i.test(proyecto)) {
-      await add(proyecto, num(p1[i]?.[4]), "CLP", "Boleta de garantía / devolución (Prog1)");
+
+    // Boletas de garantía, terrenos y devoluciones: montos en PESOS (col 5 con IVA, col 4 neto).
+    if (/^boleta|^devoluci|^terreno/i.test(proyecto)) {
+      const monto = num(p1[i]?.[5]) || num(p1[i]?.[4]);
+      await add(proyecto, monto, "CLP", "Boleta de garantía / terreno / devolución (Prog1)");
     }
   }
 
@@ -259,7 +277,7 @@ async function importProgramas() {
     const detalle = text(p2[i]?.[1]);
     const pesos = num(p2[i]?.[2]);
     if (col0) proyectoActual = col0;
-    if (detalle && pesos > 0) {
+    if (detalle && !esTotal(detalle) && pesos > 0) {
       await add(`${proyectoActual || "Programa"} — ${detalle}`, pesos, "CLP", "Programa de inversión (Prog2)");
     }
   }
@@ -273,7 +291,7 @@ async function importProgramas() {
       const detalle = text(rows[i]?.[1]);
       const total = num(rows[i]?.[4]);
       if (col0 && !detalle) bloque = col0;
-      if (detalle && total > 0) {
+      if (detalle && !esTotal(detalle) && total > 0) {
         await add(`${bloque || sheet} — ${detalle}`, total, "CLP", `${sheet}: ${periodo}`);
       }
     }
