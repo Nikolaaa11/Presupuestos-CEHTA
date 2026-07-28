@@ -112,6 +112,14 @@ async function main() {
     create: { year: YEAR, ufToClp: FX.ufToClp, usdToClp: FX.usdToClp },
   });
 
+  // ──────────────── Datos DEMO (solo con SEED_DEMO=1) ────────────────
+  // La plataforma pasó a datos reales (módulo Bancos). Los presupuestos de
+  // ejemplo solo se siembran explícitamente: SEED_DEMO=1 npx prisma db seed
+  if (process.env.SEED_DEMO !== '1') {
+    console.log('✓ Seed base completo (sin datos demo — usá SEED_DEMO=1 para incluirlos)');
+    return;
+  }
+
   // ──────────────── Presupuesto ejemplo CENERGY 2027 (ENVIADO) ────────────────
   console.log("→ Presupuesto CENERGY 2027 (ejemplo completo, ENVIADO)...");
   await prisma.budget.deleteMany({ where: { companyId: companies.CENERGY.id, year: YEAR } });

@@ -20,13 +20,14 @@ enum CompanyType {
 }
 
 model Company {
-  id      String      @id @default(cuid())
-  code    String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI
-  name    String
-  type    CompanyType
-  sector  String?
-  users   User[]
-  budgets Budget[]
+  id         String      @id @default(cuid())
+  code       String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI
+  name       String
+  type       CompanyType
+  sector     String?
+  users      User[]
+  budgets    Budget[]
+  bankSheets BankSheet[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -51,6 +52,8 @@ model User {
 
   approvalEvents ApprovalEvent[]
   fxRatesUpdated FxRate[]
+  bankSheetsUploaded BankSheet[]
+  bankMovementsReleased BankMovement[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -254,6 +257,67 @@ model ApprovalEvent {
   createdAt   DateTime       @default(now())
 
   @@index([budgetId, createdAt])
+}
+
+// ─────────────────────────────── Bancos / Tesorería ───────────────────────────────
+
+/** Una planilla bancaria subida o importada (cartola, detalle de transferencias). */
+model BankSheet {
+  id           String  @id @default(cuid())
+  companyId    String
+  company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name         String // ej. "CC Santander", "AFIS"
+  sourceFile   String // archivo de origen, ej. "CC Bancos VA 25.06.2026 (1).xlsx"
+  uploadedById String?
+  uploadedBy   User?   @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  movements BankMovement[]
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+}
+
+/** Un movimiento/transferencia de la planilla. `released` = liberado con el botón. */
+model BankMovement {
+  id       String    @id @default(cuid())
+  sheetId  String
+  sheet    BankSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  rowIndex Int // orden original en la planilla
+
+  date        DateTime? // fecha (o fecha de pago)
+  entryDate   DateTime? // fecha de ingreso (detalle de transferencias)
+  reference   String? // Nombre/Ref, N° OC o Proveedor
+  description String?
+
+  credit  Decimal  @default(0) @db.Decimal(18, 2) // Abonos
+  debit   Decimal  @default(0) @db.Decimal(18, 2) // Egresos / monto a pagar
+  balance Decimal? @db.Decimal(18, 2) // Saldo si la planilla lo trae
+
+  categoryGeneral  String? // General
+  categoryDetail   String? // Detallado
+  categorySpecific String? // Específico
+  businessCenter   String? // Centro Negocios
+  capitalTag       String? // Aporte K
+
+  rut           String?
+  bankName      String?
+  accountNumber String?
+  accountType   String?
+  docType       String?
+  docNumber     String?
+  email         String?
+  link          String?
+
+  released     Boolean   @default(false)
+  releasedAt   DateTime?
+  releasedById String?
+  releasedBy   User?     @relation(fields: [releasedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([sheetId])
+  @@index([sheetId, released])
 }
 
 model FxRate {

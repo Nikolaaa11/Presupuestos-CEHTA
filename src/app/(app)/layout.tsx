@@ -13,6 +13,7 @@ export default async function AppLayout({
     { href: "/ventas", label: "Ventas" },
     { href: "/gastos", label: "Gastos" },
     { href: "/capex", label: "CAPEX" },
+    { href: "/bancos", label: "Bancos" },
     ...(isAdmin
       ? [
           { href: "/consolidado", label: "Consolidado" },

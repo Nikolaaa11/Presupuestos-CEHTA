@@ -20,6 +20,7 @@ AFIS (administradora) · FIP CEHTA ESG (fondo) · CENERGY · CSL · RHO · DTE �
 | **Caso bancable** | Para cada *iniciativa* (nuevo negocio), las ventas y gastos vinculados generan el flujo mensual y la cobertura de la cuota — la hoja imprimible que el gerente lleva al banco. |
 | **Ciclo de aprobación** | `BORRADOR → ENVIADO → (OBSERVADO ⇄) → APROBADO`. Lo aprobado es un **snapshot inmutable**; reabrir crea la versión siguiente. Todo queda en audit log. |
 | **Consolidado** | Vista del fondo: semáforo de las 9 entidades, matriz mensual consolidada, mix contrato/proyección, pipeline CAPEX y **export Excel** (hoja por empresa + consolidado). |
+| **Bancos** | Cartolas y transferencias por empresa: **subida de planillas Excel** (detección automática de encabezados — soporta cartolas CC y detalles de transferencia), botón **Liberar/Liberado** por movimiento con auditoría (quién y cuándo), filtros pendientes/liberados, buscador y totales. Re-subir la misma hoja del mismo archivo la reemplaza (sin duplicados). |
 
 ## Stack
 
