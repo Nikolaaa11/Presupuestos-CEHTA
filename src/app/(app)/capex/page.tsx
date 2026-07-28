@@ -1,7 +1,8 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
+import { YearSelector } from "@/components/budget-grid/year-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { prisma } from "@/lib/prisma";
-import { BUDGET_YEAR, getCurrentBudget, isEditableStatus, resolveViewCompany } from "@/lib/budget";
+import { getBudgetYears, getCurrentBudget, isEditableStatus, resolveViewCompany, resolveYear } from "@/lib/budget";
 import { formatMoney, toClp, type CurrencyCode, type Fx } from "@/lib/money";
 import { CapexManager, type CapexItemView } from "./capex-manager";
 
@@ -10,13 +11,16 @@ const FX_FALLBACK: Fx = { ufToClp: "39200", usdToClp: "950" };
 export default async function CapexPage({
   searchParams,
 }: {
-  searchParams: Promise<{ empresa?: string }>;
+  searchParams: Promise<{ empresa?: string; "año"?: string }>;
 }) {
-  const { empresa } = await searchParams;
+  const params = await searchParams;
+  const empresa = params.empresa;
   const { user, company, readOnly } = await resolveViewCompany(empresa);
+  const years = await getBudgetYears(company.id);
+  const year = resolveYear(params["año"], years);
   const [budget, fxRow, companies] = await Promise.all([
-    getCurrentBudget(company.id),
-    prisma.fxRate.findUnique({ where: { year: BUDGET_YEAR } }),
+    getCurrentBudget(company.id, year),
+    prisma.fxRate.findUnique({ where: { year } }),
     user.role === "FUND_ADMIN"
       ? prisma.company.findMany({ orderBy: { code: "asc" }, select: { code: true, name: true } })
       : Promise.resolve([]),
@@ -29,6 +33,7 @@ export default async function CapexPage({
         <p className="mt-1 text-sm text-ink-soft">{company.name}</p>
       </div>
       {user.role === "FUND_ADMIN" && <CompanySelector companies={companies} selectedCode={company.code} />}
+          <YearSelector years={years.length ? years : [year]} selected={year} />
     </header>
   );
 
@@ -38,11 +43,11 @@ export default async function CapexPage({
         {header}
         <div className="rounded-xl border border-line bg-white p-10 text-center shadow-sm">
           <h2 className="text-lg font-semibold text-ink">
-            {readOnly ? "Presupuesto sin iniciar" : `Comenzar presupuesto ${BUDGET_YEAR}`}
+            {readOnly ? "Presupuesto sin iniciar" : `Comenzar presupuesto ${year}`}
           </h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-ink-soft">
             {readOnly
-              ? `${company.name} todavía no ha comenzado su presupuesto ${BUDGET_YEAR}.`
+              ? `${company.name} todavía no ha comenzado su presupuesto ${year}.`
               : "El presupuesto se crea desde el módulo Ventas; después cargá acá las inversiones del año."}
           </p>
           {!readOnly && (
@@ -101,6 +106,7 @@ export default async function CapexPage({
         </div>
         <div className="flex items-center gap-4">
           {user.role === "FUND_ADMIN" && <CompanySelector companies={companies} selectedCode={company.code} />}
+          <YearSelector years={years.length ? years : [year]} selected={year} />
           <StatusBadge status={budget.status} />
           <div className="text-right">
             <p className="text-xs text-ink-soft">CAPEX total (CLP)</p>

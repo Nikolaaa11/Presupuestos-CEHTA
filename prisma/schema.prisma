@@ -130,6 +130,21 @@ model SalesLine {
   m11 Decimal @default(0) @db.Decimal(18, 2)
   m12 Decimal @default(0) @db.Decimal(18, 2)
 
+  // Ejecución real (los Excel del fondo traen PROYECTADO vs REAL por mes).
+  // m01-m12 = presupuestado · r01-r12 = ejecutado.
+  r01 Decimal @default(0) @db.Decimal(18, 2)
+  r02 Decimal @default(0) @db.Decimal(18, 2)
+  r03 Decimal @default(0) @db.Decimal(18, 2)
+  r04 Decimal @default(0) @db.Decimal(18, 2)
+  r05 Decimal @default(0) @db.Decimal(18, 2)
+  r06 Decimal @default(0) @db.Decimal(18, 2)
+  r07 Decimal @default(0) @db.Decimal(18, 2)
+  r08 Decimal @default(0) @db.Decimal(18, 2)
+  r09 Decimal @default(0) @db.Decimal(18, 2)
+  r10 Decimal @default(0) @db.Decimal(18, 2)
+  r11 Decimal @default(0) @db.Decimal(18, 2)
+  r12 Decimal @default(0) @db.Decimal(18, 2)
+
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -173,6 +188,21 @@ model ExpenseLine {
   m10 Decimal @default(0) @db.Decimal(18, 2)
   m11 Decimal @default(0) @db.Decimal(18, 2)
   m12 Decimal @default(0) @db.Decimal(18, 2)
+
+  // Ejecución real (los Excel del fondo traen PROYECTADO vs REAL por mes).
+  // m01-m12 = presupuestado · r01-r12 = ejecutado.
+  r01 Decimal @default(0) @db.Decimal(18, 2)
+  r02 Decimal @default(0) @db.Decimal(18, 2)
+  r03 Decimal @default(0) @db.Decimal(18, 2)
+  r04 Decimal @default(0) @db.Decimal(18, 2)
+  r05 Decimal @default(0) @db.Decimal(18, 2)
+  r06 Decimal @default(0) @db.Decimal(18, 2)
+  r07 Decimal @default(0) @db.Decimal(18, 2)
+  r08 Decimal @default(0) @db.Decimal(18, 2)
+  r09 Decimal @default(0) @db.Decimal(18, 2)
+  r10 Decimal @default(0) @db.Decimal(18, 2)
+  r11 Decimal @default(0) @db.Decimal(18, 2)
+  r12 Decimal @default(0) @db.Decimal(18, 2)
 
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())

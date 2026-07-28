@@ -9,7 +9,27 @@ import { requireUser, type SessionUser } from "@/lib/authz";
  * ENVIADO / APROBADO / CERRADO son de solo lectura (la API lo garantiza, no la UI).
  */
 
-export const BUDGET_YEAR = 2027; // selector multi-año: F5
+/** Año por defecto de la plataforma (los datos cargados son 2025 y 2026). */
+export const BUDGET_YEAR = 2026;
+
+/** Años con presupuesto cargado para una empresa, del más nuevo al más viejo. */
+export async function getBudgetYears(companyId: string): Promise<number[]> {
+  const rows = await prisma.budget.findMany({
+    where: { companyId },
+    distinct: ["year"],
+    select: { year: true },
+    orderBy: { year: "desc" },
+  });
+  return rows.map((r) => r.year);
+}
+
+/** Resuelve el año pedido por query string contra los años existentes. */
+export function resolveYear(requested: string | undefined, available: number[]): number {
+  const parsed = Number(requested);
+  if (Number.isInteger(parsed) && available.includes(parsed)) return parsed;
+  if (available.includes(BUDGET_YEAR)) return BUDGET_YEAR;
+  return available[0] ?? BUDGET_YEAR;
+}
 
 export const EDITABLE_STATUSES = ["BORRADOR", "OBSERVADO"] as const;
 

@@ -13,6 +13,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import Decimal from "decimal.js";
 import {
   formatCell,
   formatMoney,
@@ -21,9 +22,10 @@ import {
   MONTH_LABELS,
   monthlyTotals,
   type CurrencyCode,
+  realKeyOf,
   type MonthKey,
 } from "@/lib/money";
-import type { ActionResult, GridLine, MonthPatch } from "./types";
+import type { ActionResult, GridLine, GridView, MonthPatch } from "./types";
 
 /**
  * Grilla de montos mes a mes.
@@ -65,6 +67,25 @@ type Props<T extends GridLine> = {
   groupLabel?: (line: T) => string;
 };
 
+/**
+ * Valor de una celda según la serie visible.
+ *  - presupuesto: m01-m12 (editable)
+ *  - real:        r01-r12 (ejecutado, solo lectura)
+ *  - variacion:   real − presupuesto (solo lectura)
+ */
+export function cellValueFor(line: GridLine, key: MonthKey, view: GridView): string {
+  const budget = line[key] ?? "0";
+  if (view === "presupuesto") return budget;
+  const real = line[realKeyOf(key)] ?? "0";
+  if (view === "real") return real;
+  return new Decimal(real).minus(new Decimal(budget)).toString();
+}
+
+/** ¿La planilla trae ejecución real cargada? */
+function hasRealData(lines: GridLine[]): boolean {
+  return lines.some((line) => MONTH_KEYS.some((k) => Number(line[realKeyOf(k)] ?? 0) !== 0));
+}
+
 function normalizeAmount(value: string): string | null {
   const compact = value.trim().replace(/\s/g, "");
   if (compact === "") return "0";
@@ -85,6 +106,7 @@ function normalizeAmount(value: string): string | null {
 const MoneyInput = memo(function MoneyInput({
   value,
   disabled,
+  negative = false,
   rowIndex,
   monthIndex,
   onCommit,
@@ -92,6 +114,7 @@ const MoneyInput = memo(function MoneyInput({
 }: {
   value: string;
   disabled: boolean;
+  negative?: boolean;
   rowIndex: number;
   monthIndex: number;
   onCommit: (next: string, previous: string) => void;
@@ -141,7 +164,9 @@ const MoneyInput = memo(function MoneyInput({
       onBlur={commit}
       onKeyDown={handleKeyDown}
       onPaste={(event) => onPaste(event, rowIndex, monthIndex)}
-      className="cell-num h-9 w-24 rounded border border-transparent bg-transparent px-2 text-sm text-ink outline-none enabled:hover:border-line enabled:focus:border-brand enabled:focus:bg-white disabled:cursor-default"
+      className={`cell-num h-9 w-24 rounded border border-transparent bg-transparent px-2 text-sm outline-none enabled:hover:border-line enabled:focus:border-brand enabled:focus:bg-white disabled:cursor-default ${
+        negative ? "text-danger" : "text-ink"
+      }`}
     />
   );
 });
@@ -152,6 +177,7 @@ type RowProps<T extends GridLine> = {
   line: T;
   rowIndex: number;
   editable: boolean;
+  view: GridView;
   renderMetadata: Props<T>["renderMetadata"];
   onCommitMonth: (lineId: string, key: MonthKey, next: string, previous: string) => void;
   onCommitMeta: <K extends keyof T>(lineId: string, key: K, value: T[K], previous: T[K]) => void;
@@ -163,14 +189,20 @@ function GridRowInner<T extends GridLine>({
   line,
   rowIndex,
   editable,
+  view,
   renderMetadata,
   onCommitMonth,
   onCommitMeta,
   onDelete,
   onPaste,
 }: RowProps<T>) {
-  // Total de la fila: se recalcula solo cuando cambia ESTA fila (memo del componente).
-  const total = lineTotal(line);
+  // Total de la fila en la serie visible: se recalcula solo cuando cambia ESTA
+  // fila o la vista (memo del componente).
+  const total = MONTH_KEYS.reduce(
+    (acc, k) => acc.plus(new Decimal(cellValueFor(line, k, view) || 0)),
+    new Decimal(0),
+  );
+  const editableCells = editable && view === "presupuesto";
 
   const updateMeta = useCallback(
     <K extends keyof T>(key: K, value: T[K]) => onCommitMeta(line.id, key, value, line[key]),
@@ -180,23 +212,32 @@ function GridRowInner<T extends GridLine>({
   return (
     <tr className="border-b border-line/70 hover:bg-soft/60">
       {renderMetadata(line, rowIndex, updateMeta, !editable)}
-      {MONTH_KEYS.map((month, monthIndex) => (
-        <td key={month} className="px-1 py-1">
-          <MoneyInput
-            value={line[month]}
-            disabled={!editable}
-            rowIndex={rowIndex}
-            monthIndex={monthIndex}
-            onCommit={(next, previous) => onCommitMonth(line.id, month, next, previous)}
-            onPaste={onPaste}
-          />
-        </td>
-      ))}
-      <td className="cell-num border-l border-line bg-soft/50 px-3 py-2 text-sm font-semibold text-ink">
+      {MONTH_KEYS.map((month, monthIndex) => {
+        const value = cellValueFor(line, month, view);
+        const negative = view === "variacion" && Number(value) < 0;
+        return (
+          <td key={month} className="px-1 py-1">
+            <MoneyInput
+              value={value}
+              disabled={!editableCells}
+              negative={negative}
+              rowIndex={rowIndex}
+              monthIndex={monthIndex}
+              onCommit={(next, previous) => onCommitMonth(line.id, month, next, previous)}
+              onPaste={onPaste}
+            />
+          </td>
+        );
+      })}
+      <td
+        className={`cell-num border-l border-line bg-soft/50 px-3 py-2 text-sm font-semibold ${
+          view === "variacion" && total.isNegative() ? "text-danger" : "text-ink"
+        }`}
+      >
         {formatCell(total)}
       </td>
       <td className="px-2 text-center">
-        {editable && (
+        {editableCells && (
           <button
             type="button"
             aria-label={`Eliminar línea ${rowIndex + 1}`}
@@ -232,6 +273,7 @@ export function AmountGrid<T extends GridLine>({
   groupKey,
   groupLabel,
 }: Props<T>) {
+  const [view, setView] = useState<GridView>("presupuesto");
   const [lines, setLines] = useState(initialLines);
   const [sourceLines, setSourceLines] = useState(initialLines);
   const [message, setMessage] = useState<string | null>(null);
@@ -358,8 +400,18 @@ export function AmountGrid<T extends GridLine>({
     [budgetId, bulkUpdate, editable, groupKey, run],
   );
 
-  // Totales del pie y total anual: una pasada por cambio de datos.
-  const totals = useMemo(() => monthlyTotals(lines), [lines]);
+  const conReal = useMemo(() => hasRealData(lines), [lines]);
+  const activeView: GridView = conReal ? view : "presupuesto";
+
+  // Totales del pie y total anual, en la serie visible.
+  const totals = useMemo(() => {
+    if (activeView === "presupuesto") return monthlyTotals(lines);
+    const acc = Object.fromEntries(MONTH_KEYS.map((k) => [k, new Decimal(0)])) as Record<MonthKey, Decimal>;
+    for (const line of lines) {
+      for (const k of MONTH_KEYS) acc[k] = acc[k].plus(new Decimal(cellValueFor(line, k, activeView) || 0));
+    }
+    return acc;
+  }, [lines, activeView]);
   const grandTotal = useMemo(() => lineTotal(totals), [totals]);
 
   // Subtotales por categoría: UNA pasada agrupando, en vez de filtrar y sumar
@@ -375,11 +427,19 @@ export function AmountGrid<T extends GridLine>({
     }
     return new Map(
       [...byGroup].map(([key, groupLines]) => {
-        const monthly = monthlyTotals(groupLines);
+        const monthly =
+          activeView === "presupuesto"
+            ? monthlyTotals(groupLines)
+            : (Object.fromEntries(
+                MONTH_KEYS.map((k) => [
+                  k,
+                  groupLines.reduce((acc, l) => acc.plus(new Decimal(cellValueFor(l, k, activeView) || 0)), new Decimal(0)),
+                ]),
+              ) as Record<MonthKey, Decimal>);
         return [key, { monthly, total: lineTotal(monthly) }];
       }),
     );
-  }, [groupKey, lines]);
+  }, [groupKey, lines, activeView]);
 
   return (
     <section className="overflow-hidden rounded-xl border border-line bg-white shadow-sm">
@@ -393,13 +453,35 @@ export function AmountGrid<T extends GridLine>({
             "Guardado ✓"
           )}
         </p>
-        <div className="flex items-center gap-4">
-          <p className="hidden text-xs text-ink-soft sm:block">
-            Puedes pegar bloques desde Excel en cualquier mes.
-          </p>
+        <div className="flex flex-wrap items-center gap-4">
+          {conReal ? (
+            <div className="flex items-center gap-1" role="group" aria-label="Serie a mostrar">
+              {(["presupuesto", "real", "variacion"] as GridView[]).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  aria-pressed={activeView === v}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition ${
+                    activeView === v ? "bg-brand text-white" : "border border-line text-ink-soft hover:bg-soft"
+                  }`}
+                >
+                  {v === "variacion" ? "variación" : v}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="hidden text-xs text-ink-soft sm:block">
+              Puedes pegar bloques desde Excel en cualquier mes.
+            </p>
+          )}
           <p className="text-sm">
-            <span className="text-xs text-ink-soft">Total anual </span>
-            <strong className="text-ink">{formatMoney(grandTotal, currency)}</strong>
+            <span className="text-xs text-ink-soft">
+              {activeView === "presupuesto" ? "Total anual " : activeView === "real" ? "Total ejecutado " : "Variación anual "}
+            </span>
+            <strong className={activeView === "variacion" && grandTotal.isNegative() ? "text-danger" : "text-ink"}>
+              {formatMoney(grandTotal, currency)}
+            </strong>
           </p>
         </div>
       </div>
@@ -438,6 +520,7 @@ export function AmountGrid<T extends GridLine>({
                     line={line}
                     rowIndex={rowIndex}
                     editable={editable}
+                    view={activeView}
                     renderMetadata={renderMetadata}
                     onCommitMonth={onCommitMonth}
                     onCommitMeta={onCommitMeta}
@@ -462,7 +545,9 @@ export function AmountGrid<T extends GridLine>({
           </tbody>
           <tfoot className="bg-brand-dark text-white">
             <tr>
-              <th colSpan={metadataHeaders.length} className="px-3 py-3 text-sm">Total anual</th>
+              <th colSpan={metadataHeaders.length} className="px-3 py-3 text-sm">
+                {activeView === "presupuesto" ? "Total anual" : activeView === "real" ? "Total ejecutado" : "Variación (real − presupuesto)"}
+              </th>
               {MONTH_KEYS.map((key) => (
                 <td key={key} className="cell-num px-3 py-3 text-sm font-semibold">{formatCell(totals[key])}</td>
               ))}
@@ -473,7 +558,7 @@ export function AmountGrid<T extends GridLine>({
         </table>
       </div>
 
-      {editable && (
+      {editable && activeView === "presupuesto" && (
         <div className="border-t border-line p-4">
           <button
             type="button"

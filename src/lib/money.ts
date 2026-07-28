@@ -19,6 +19,18 @@ export const MONTH_KEYS = [
 ] as const;
 export type MonthKey = (typeof MONTH_KEYS)[number];
 
+/** Serie de ejecución real: mismas 12 posiciones que MONTH_KEYS. */
+export const REAL_MONTH_KEYS = [
+  "r01", "r02", "r03", "r04", "r05", "r06",
+  "r07", "r08", "r09", "r10", "r11", "r12",
+] as const;
+export type RealMonthKey = (typeof REAL_MONTH_KEYS)[number];
+
+/** m03 → r03 */
+export function realKeyOf(key: MonthKey): RealMonthKey {
+  return `r${key.slice(1)}` as RealMonthKey;
+}
+
 export const MONTH_LABELS: Record<MonthKey, string> = {
   m01: "Ene", m02: "Feb", m03: "Mar", m04: "Abr", m05: "May", m06: "Jun",
   m07: "Jul", m08: "Ago", m09: "Sep", m10: "Oct", m11: "Nov", m12: "Dic",
