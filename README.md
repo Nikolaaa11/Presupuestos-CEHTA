@@ -19,6 +19,7 @@ AFIS (administradora) · FIP CEHTA ESG (fondo) · CENERGY · CSL · RHO · DTE �
 | **CAPEX** | Inversiones del año: monto (CLP/UF/USD), **mes en que se requiere**, plazo y fuente de financiamiento. Nivel de aprobación **N1–N6** calculado automáticamente por umbrales en UF (matriz LOA del fondo). |
 | **Caso bancable** | Para cada *iniciativa* (nuevo negocio), las ventas y gastos vinculados generan el flujo mensual y la cobertura de la cuota — la hoja imprimible que el gerente lleva al banco. |
 | **Ciclo de aprobación** | `BORRADOR → ENVIADO → (OBSERVADO ⇄) → APROBADO`. Lo aprobado es un **snapshot inmutable**; reabrir crea la versión siguiente. Todo queda en audit log. |
+| **Ejecución real** | Los Excel del fondo traen PROYECTADO vs REAL por mes, así que cada línea de venta y gasto guarda ambas series. Las grillas tienen un selector **Presupuesto / Real / Variación** y el dashboard y el consolidado muestran lo ejecutado además de lo presupuestado. |
 | **Consolidado** | Vista del fondo: semáforo de las 9 entidades, matriz mensual consolidada, mix contrato/proyección, pipeline CAPEX y **export Excel** (hoja por empresa + consolidado). |
 | **Bancos** | Cartolas y transferencias por empresa: **subida de planillas Excel** (detección automática de encabezados — soporta cartolas CC y detalles de transferencia), botón **Liberar/Liberado** por movimiento con auditoría (quién y cuándo), filtros pendientes/liberados, buscador y totales. Re-subir la misma hoja del mismo archivo la reemplaza (sin duplicados). |
 
@@ -39,13 +40,32 @@ npm run dev                 # http://localhost:3000
 
 > **Nota — migraciones en dev**: el schema engine de `prisma migrate dev` no conecta con el servidor wasm de `prisma dev`; por eso `npm run db:apply` aplica los SQL de `prisma/migrations/` vía driver pg. Para una migración nueva: editá `prisma/schema.prisma`, generá el SQL con `npx prisma migrate diff` y guardalo en `prisma/migrations/<timestamp>_<nombre>/migration.sql`, después `npm run db:apply`. En producción (Postgres real) funciona el flujo estándar `npx prisma migrate deploy`.
 
+### Datos cargados (de los Excel del fondo)
+
+| Origen | Módulo |
+|---|---|
+| CC Santander (821) · CC BICE (65) | Bancos — cartolas de RHO |
+| AFIS (45) · CEnergy (51) | Bancos — detalles de transferencia |
+| OCRho (98) · OCPani (18) | Bancos — órdenes de compra (pagada = liberada) |
+| FlujoII | Ventas (ABONOS) y Gastos (EGRESOS) de RHO, 2025 y 2026, con proyectado y real |
+| Prog1–Prog5 | CAPEX de RHO (114 ítems: cartera de proyectos, boletas, programas) |
+| Hoja1 (Transferencia detalle) | Gastos recurrentes de AFIS 2026 |
+
+Para reimportar (ambos scripts son idempotentes):
+
+```bash
+npx tsx scripts/import-bancos.ts          # cartolas y transferencias
+npx tsx scripts/import-excel-completo.ts  # FlujoII, programas, OCs y Hoja1
+```
+
 ### Usuarios demo
 
 | Usuario | Clave | Rol |
 |---|---|---|
 | `admin@cehta.cl` | `Cehta2026!` | Fondo (ve todo, aprueba, consolida, exporta) |
-| `demo.cenergy@cehta.cl` | `Demo2026!` | Gerencia CENERGY (presupuesto ejemplo con iniciativa bancable) |
-| `demo.rho@cehta.cl` | `Demo2026!` | Gerencia RHO (borrador a medio llenar) |
+| `demo.rho@cehta.cl` | `Demo2026!` | Gerencia RHO (presupuestos 2025 y 2026, CAPEX, cartolas y OCs) |
+| `demo.afis@cehta.cl` | `Demo2026!` | Gerencia AFIS (gastos 2026 y transferencias por liberar) |
+| `demo.cenergy@cehta.cl` | `Demo2026!` | Gerencia CENERGY (transferencias por liberar) |
 | `demo.<código>@cehta.cl` | `Demo2026!` | Gerencias AFIS, FIP, CSL, DTE, EVOQUE, REVTECH, TRONGKAI |
 
 Cada gerencia ve **solo su empresa**; la autorización vive en el servidor (guards en cada página y server action), no en la UI.
