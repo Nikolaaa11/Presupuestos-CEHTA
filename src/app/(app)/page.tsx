@@ -26,12 +26,18 @@ function eventDate(d: Date): string {
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  return user.role === "FUND_ADMIN" ? <AdminDashboard /> : <ManagerDashboard companyId={user.companyId!} />;
+  // Los roles del fondo (administración y circuito de pagos) no tienen empresa
+  // asignada: ven el panorama de las 10 entidades. Solo la gerencia, que sí
+  // tiene empresa, ve el resumen de la suya.
+  if (user.role === "COMPANY_MANAGER" && user.companyId) {
+    return <ManagerDashboard companyId={user.companyId} />;
+  }
+  return <AdminDashboard puedeAprobar={user.role === "FUND_ADMIN"} />;
 }
 
 // ─────────────────────────── Vista fondo ───────────────────────────
 
-async function AdminDashboard() {
+async function AdminDashboard({ puedeAprobar }: { puedeAprobar: boolean }) {
   const companies = await prisma.company.findMany({
     orderBy: [{ type: "asc" }, { code: "asc" }],
     include: {
@@ -100,7 +106,7 @@ async function AdminDashboard() {
 
               {budget && (
                 <div className="mt-auto">
-                  <AdminBudgetActions budgetId={budget.id} status={budget.status} />
+                  {puedeAprobar && <AdminBudgetActions budgetId={budget.id} status={budget.status} />}
                   <div className="mt-3 flex gap-3 border-t border-line pt-3 text-xs">
                     <Link className="font-medium text-brand hover:text-brand-deep" href={`/ventas?empresa=${c.code}`}>Ventas</Link>
                     <Link className="font-medium text-brand hover:text-brand-deep" href={`/gastos?empresa=${c.code}`}>Gastos</Link>
