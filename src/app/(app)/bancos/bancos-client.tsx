@@ -4,16 +4,19 @@ import { memo, useCallback, useMemo, useRef, useState, useTransition } from "rea
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import Decimal from "decimal.js";
 import { formatCell, formatMoney } from "@/lib/money";
-import { setMovementReleased, deleteSheet } from "./actions";
+import {
+  liberarPagos,
+  deshacerLiberacion,
+  registrarComprobante,
+  marcarTransferida,
+  revertirTransferencia,
+  editarMovimiento,
+  deleteSheet,
+} from "./actions";
 
 export type SheetView = {
-  id: string;
-  name: string;
-  sourceFile: string;
-  uploadedBy: string;
-  createdAt: string;
-  total: number;
-  pending: number;
+  id: string; name: string; sourceFile: string; uploadedBy: string;
+  createdAt: string; total: number; pending: number;
 };
 
 export type MovementView = {
@@ -29,81 +32,112 @@ export type MovementView = {
   rut: string | null;
   bankName: string | null;
   accountNumber: string | null;
-  docType: string | null;
-  docNumber: string | null;
+  accountType: string | null;
   email: string | null;
-  link: string | null;
-  released: boolean;
-  releasedBy: string | null;
-  releasedAt: string | null;
+  estado: string;
+  lote: string | null;
 };
 
-type Filter = "todos" | "pendientes" | "liberados";
+export type LoteView = {
+  id: string; numero: string; status: string; pagos: number; total: string;
+  liberadoPor: string; liberadoEl: string;
+  comprobante: string | null; comprobantePor: string | null;
+  transferidoPor: string | null; transferidoEl: string | null;
+  nota: string | null;
+};
 
-const fmtDate = (iso: string | null) =>
+export type BitacoraEntry = { id: string; quien: string; accion: string; detalle: string | null; cuando: string };
+
+type Permisos = { libera: boolean; comprobante: boolean; edita: boolean };
+type Filtro = "todos" | "pendientes" | "liberados" | "en_transferencia" | "transferidos";
+
+const ESTADO_CHIP: Record<string, string> = {
+  PENDIENTE: "bg-soft text-ink-soft border-line",
+  LIBERADO: "bg-warn-bg text-warn border-warn/30",
+  EN_TRANSFERENCIA: "bg-lavender-bg text-brand-dark border-lavender",
+  TRANSFERIDO: "bg-ok-bg text-ok border-ok/30",
+};
+const ESTADO_TEXTO: Record<string, string> = {
+  PENDIENTE: "Pendiente", LIBERADO: "Liberado",
+  EN_TRANSFERENCIA: "En transferencia", TRANSFERIDO: "Transferido",
+};
+const LOTE_TEXTO: Record<string, string> = {
+  LIBERADO: "Esperando comprobante", COMPROBANTE_SUBIDO: "Comprobante subido", TRANSFERIDO: "Transferido",
+};
+
+const fmtFecha = (iso: string | null) =>
   iso ? `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}` : "—";
+const montoDe = (m: MovementView) =>
+  new Decimal(m.debit).abs().isZero() ? new Decimal(m.credit).abs() : new Decimal(m.debit).abs();
 
-// ─────────────────────────── Fila de movimiento ───────────────────────────
+/** Qué le falta al movimiento para que el banco acepte la transferencia. */
+const faltaDatos = (m: MovementView) =>
+  [!m.rut && "RUT", !m.bankName && "banco", !m.accountNumber && "cuenta"].filter(Boolean).join(", ");
+
+// ─────────────────────────── Fila ───────────────────────────
 
 const MovementRow = memo(function MovementRow({
-  m,
-  onToggle,
+  m, seleccionado, puedeSeleccionar, puedeEditar, onSeleccionar, onEditar,
 }: {
   m: MovementView;
-  onToggle: (movement: MovementView, released: boolean) => void;
+  seleccionado: boolean;
+  puedeSeleccionar: boolean;
+  puedeEditar: boolean;
+  onSeleccionar: (id: string, valor: boolean) => void;
+  onEditar: (m: MovementView) => void;
 }) {
-  const amountIsCredit = Number(m.credit) !== 0;
-  const amount = amountIsCredit ? m.credit : m.debit;
-
+  const esAbono = Number(m.credit) !== 0;
   return (
-    <tr className={`border-b border-line/70 align-top ${m.released ? "bg-ok-bg/30" : "hover:bg-soft/60"}`}>
-      <td className="whitespace-nowrap px-3 py-2.5 text-sm text-ink">{fmtDate(m.date ?? m.entryDate)}</td>
-      <td className="max-w-56 px-3 py-2.5">
-        <p className="truncate text-sm font-medium text-ink" title={m.reference ?? undefined}>
-          {m.reference ?? "—"}
-        </p>
-        {(m.docType || m.docNumber) && (
-          <p className="text-xs text-ink-soft">{[m.docType, m.docNumber].filter(Boolean).join(" ")}</p>
-        )}
+    <tr className={`border-b border-line/70 align-top ${seleccionado ? "bg-lavender-bg/40" : "hover:bg-soft/60"}`}>
+      <td className="px-3 py-2.5">
+        {puedeSeleccionar && m.estado === "PENDIENTE" ? (
+          <input
+            type="checkbox"
+            checked={seleccionado}
+            onChange={(e) => onSeleccionar(m.id, e.target.checked)}
+            aria-label={`Seleccionar ${m.reference ?? "movimiento"}`}
+            className="h-4 w-4 accent-brand"
+          />
+        ) : null}
       </td>
-      <td className="max-w-72 px-3 py-2.5">
-        <p className="text-sm leading-snug text-ink" title={m.description ?? undefined}>
-          {m.description ?? "—"}
-        </p>
+      <td className="whitespace-nowrap px-3 py-2.5 text-sm text-ink">{fmtFecha(m.date ?? m.entryDate)}</td>
+      <td className="max-w-52 px-3 py-2.5">
+        <p className="truncate text-sm font-medium text-ink" title={m.reference ?? undefined}>{m.reference ?? "—"}</p>
+        {m.rut && <p className="text-xs text-ink-soft">{m.rut}</p>}
+      </td>
+      <td className="max-w-64 px-3 py-2.5">
+        <p className="text-sm leading-snug text-ink">{m.description ?? "—"}</p>
         {(m.categoryGeneral || m.businessCenter) && (
-          <p className="mt-0.5 text-xs text-ink-soft">
-            {[m.categoryGeneral, m.businessCenter].filter(Boolean).join(" · ")}
-          </p>
+          <p className="mt-0.5 text-xs text-ink-soft">{[m.categoryGeneral, m.businessCenter].filter(Boolean).join(" · ")}</p>
         )}
       </td>
-      <td className={`cell-num whitespace-nowrap px-3 py-2.5 text-sm font-semibold ${amountIsCredit ? "text-ok" : "text-ink"}`}>
-        {amountIsCredit ? "+" : ""}
-        {formatCell(amount) || "0"}
+      <td className={`cell-num whitespace-nowrap px-3 py-2.5 text-sm font-semibold ${esAbono ? "text-ok" : "text-ink"}`}>
+        {esAbono ? "+" : ""}{formatCell(esAbono ? m.credit : m.debit) || "0"}
       </td>
-      <td className="max-w-48 px-3 py-2.5 text-xs text-ink-soft">
+      <td className="max-w-44 px-3 py-2.5 text-xs text-ink-soft">
         {m.bankName && <p className="truncate">{m.bankName}</p>}
         {m.accountNumber && <p className="cell-num truncate text-left">{m.accountNumber}</p>}
-        {m.rut && <p className="truncate">{m.rut}</p>}
-        {!m.bankName && !m.accountNumber && !m.rut && "—"}
+        {faltaDatos(m) && (
+          <p className="text-warn" title="El banco rechaza la transferencia sin estos datos">
+            ⚠ falta {faltaDatos(m)}
+          </p>
+        )}
       </td>
       <td className="whitespace-nowrap px-3 py-2.5">
-        <button
-          type="button"
-          onClick={() => onToggle(m, !m.released)}
-          aria-pressed={m.released}
-          className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-            m.released
-              ? "bg-ok text-white hover:opacity-85"
-              : "border border-brand bg-white text-brand hover:bg-lavender-bg"
-          }`}
-          title={m.released ? "Clic para volver a pendiente" : "Marcar como liberado"}
-        >
-          {m.released ? "Liberado ✓" : "Liberar"}
-        </button>
-        {m.released && (m.releasedBy || m.releasedAt) && (
-          <p className="mt-1 text-[10px] leading-tight text-ink-soft">
-            {[m.releasedBy, m.releasedAt].filter(Boolean).join(" · ")}
-          </p>
+        <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${ESTADO_CHIP[m.estado]}`}>
+          {ESTADO_TEXTO[m.estado] ?? m.estado}
+        </span>
+        {m.lote && <p className="mt-1 text-[10px] text-ink-soft">{m.lote}</p>}
+      </td>
+      <td className="px-2 py-2.5 text-right">
+        {puedeEditar && (
+          <button
+            type="button"
+            onClick={() => onEditar(m)}
+            className="rounded px-2 py-1 text-xs font-medium text-brand hover:bg-lavender-bg"
+          >
+            Editar
+          </button>
         )}
       </td>
     </tr>
@@ -113,303 +147,448 @@ const MovementRow = memo(function MovementRow({
 // ─────────────────────────── Componente principal ───────────────────────────
 
 export function BancosClient({
-  companyCode,
-  sheets,
-  selectedSheetId,
-  movements: initialMovements,
+  companyCode, sheets, selectedSheetId, movements: initial, lotes, bitacora, permisos, quienSoy,
 }: {
   companyCode: string;
   sheets: SheetView[];
   selectedSheetId: string | null;
   movements: MovementView[];
+  lotes: LoteView[];
+  bitacora: BitacoraEntry[];
+  permisos: Permisos;
+  quienSoy: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const [movements, setMovements] = useState(initialMovements);
-  const [source, setSource] = useState(initialMovements);
-  if (initialMovements !== source) {
-    setSource(initialMovements);
-    setMovements(initialMovements);
-  }
+  const [movements, setMovements] = useState(initial);
+  const [source, setSource] = useState(initial);
+  if (initial !== source) { setSource(initial); setMovements(initial); }
 
-  const [filter, setFilter] = useState<Filter>("todos");
-  const [search, setSearch] = useState("");
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
+  const [filtro, setFiltro] = useState<Filtro>("todos");
+  const [busqueda, setBusqueda] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
+  const [editando, setEditando] = useState<MovementView | null>(null);
+  const [verBitacora, setVerBitacora] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
   const [, startTransition] = useTransition();
   const fileRef = useRef<HTMLInputElement>(null);
-  const sheetsFilterRef = useRef<HTMLInputElement>(null);
+  const hojasRef = useRef<HTMLInputElement>(null);
 
   const stats = useMemo(() => {
-    let pending = 0;
-    let pendingAmount = new Decimal(0);
-    let releasedCount = 0;
-    let releasedAmount = new Decimal(0);
+    const acc = { pendientes: 0, montoPendiente: new Decimal(0), liberados: 0, enTransferencia: 0, transferidos: 0 };
     for (const m of movements) {
-      const amount = new Decimal(m.debit).abs().plus(new Decimal(m.credit).abs());
-      if (m.released) {
-        releasedCount++;
-        releasedAmount = releasedAmount.plus(amount);
-      } else {
-        pending++;
-        pendingAmount = pendingAmount.plus(amount);
-      }
+      const monto = montoDe(m);
+      if (m.estado === "PENDIENTE") { acc.pendientes++; acc.montoPendiente = acc.montoPendiente.plus(monto); }
+      else if (m.estado === "LIBERADO") acc.liberados++;
+      else if (m.estado === "EN_TRANSFERENCIA") acc.enTransferencia++;
+      else acc.transferidos++;
     }
-    return { pending, pendingAmount, releasedCount, releasedAmount };
+    return acc;
   }, [movements]);
 
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
+  const visibles = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    const porEstado: Record<Filtro, (m: MovementView) => boolean> = {
+      todos: () => true,
+      pendientes: (m) => m.estado === "PENDIENTE",
+      liberados: (m) => m.estado === "LIBERADO",
+      en_transferencia: (m) => m.estado === "EN_TRANSFERENCIA",
+      transferidos: (m) => m.estado === "TRANSFERIDO",
+    };
     return movements.filter((m) => {
-      if (filter === "pendientes" && m.released) return false;
-      if (filter === "liberados" && !m.released) return false;
+      if (!porEstado[filtro](m)) return false;
       if (!q) return true;
       return [m.reference, m.description, m.rut, m.bankName, m.categoryGeneral, m.businessCenter]
         .some((v) => v?.toLowerCase().includes(q));
     });
-  }, [movements, filter, search]);
+  }, [movements, filtro, busqueda]);
 
-  /**
-   * El snapshot para el rollback lo aporta la propia fila (que ya tiene el
-   * movimiento completo): así el callback no depende del estado ni de un ref,
-   * se mantiene estable para la memoización, y al fallar se restaura el
-   * movimiento TAL CUAL estaba —incluidos releasedBy/releasedAt originales—
-   * en vez de solo invertir el booleano.
-   */
-  const onToggle = useCallback((before: MovementView, released: boolean) => {
-    setError(null);
-    setMovements((current) =>
-      current.map((m) =>
-        m.id === before.id
-          ? { ...m, released, releasedBy: released ? "vos" : null, releasedAt: released ? "recién" : null }
-          : m,
-      ),
-    );
-    startTransition(async () => {
-      const result = await setMovementReleased(before.id, released);
-      if (!result.ok) {
-        setMovements((current) => current.map((m) => (m.id === before.id ? before : m)));
-        setError(result.error);
-      }
+  const seleccionables = visibles.filter((m) => m.estado === "PENDIENTE");
+  const totalSeleccionado = useMemo(
+    () => movements.filter((m) => seleccion.has(m.id)).reduce((a, m) => a.plus(montoDe(m)), new Decimal(0)),
+    [movements, seleccion],
+  );
+  const incompletosSeleccionados = useMemo(
+    () => movements.filter((m) => seleccion.has(m.id) && faltaDatos(m)).length,
+    [movements, seleccion],
+  );
+
+  const onSeleccionar = useCallback((id: string, valor: boolean) => {
+    setSeleccion((prev) => {
+      const next = new Set(prev);
+      if (valor) next.add(id); else next.delete(id);
+      return next;
     });
   }, []);
 
-  function selectSheet(id: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("planilla", id);
-    router.push(`${pathname}?${params.toString()}`);
+  function correr(fn: () => Promise<{ ok: true } | { ok: false; error: string }>, exito?: string) {
+    setError(null); setAviso(null);
+    startTransition(async () => {
+      const r = await fn();
+      if (!r.ok) setError(r.error);
+      else { setAviso(exito ?? "Listo"); setSeleccion(new Set()); router.refresh(); }
+    });
   }
 
-  async function onUpload(event: React.FormEvent) {
-    event.preventDefault();
+  async function onSubirPlanilla(e: React.FormEvent) {
+    e.preventDefault();
     const file = fileRef.current?.files?.[0];
-    if (!file) {
-      setUploadMsg("Elegí un archivo Excel primero.");
-      return;
-    }
-    setUploading(true);
-    setUploadMsg(null);
+    if (!file) { setError("Elegí un archivo Excel primero."); return; }
+    setSubiendo(true); setError(null); setAviso(null);
     try {
       const form = new FormData();
       form.set("file", file);
       form.set("companyCode", companyCode);
-      const sheetsFilter = sheetsFilterRef.current?.value?.trim();
-      if (sheetsFilter) form.set("sheets", sheetsFilter);
-
+      const hojas = hojasRef.current?.value?.trim();
+      if (hojas) form.set("sheets", hojas);
       const res = await fetch("/api/bancos/upload", { method: "POST", body: form });
       const json = await res.json();
-      if (!res.ok) {
-        setUploadMsg(json.error ?? "Error al subir la planilla");
-      } else {
-        const detail = json.created
-          .map((c: { sheet: string; movements: number }) => `${c.sheet}: ${c.movements} movimientos`)
-          .join(" · ");
-        setUploadMsg(`Planilla cargada ✓ — ${detail}`);
+      if (!res.ok) setError(json.error ?? "Error al subir la planilla");
+      else {
+        setAviso(`Planilla cargada: ${json.created.map((c: { sheet: string; movements: number }) => `${c.sheet} (${c.movements})`).join(" · ")}`);
         if (fileRef.current) fileRef.current.value = "";
         router.refresh();
       }
-    } catch {
-      setUploadMsg("Error de conexión al subir la planilla");
-    } finally {
-      setUploading(false);
-    }
+    } catch { setError("Error de conexión al subir la planilla"); }
+    finally { setSubiendo(false); }
   }
+
+  const irAPlanilla = (id: string) => {
+    const p = new URLSearchParams(searchParams.toString());
+    p.set("planilla", id);
+    router.push(`${pathname}?${p.toString()}`);
+  };
 
   return (
     <div className="space-y-4">
-      {/* Subir planilla */}
-      <form
-        onSubmit={onUpload}
-        className="flex flex-wrap items-end gap-3 rounded-xl border border-line bg-white p-4"
-      >
+      {/* Subir planilla + descargas */}
+      <form onSubmit={onSubirPlanilla} className="flex flex-wrap items-end gap-3 rounded-xl border border-line bg-white p-4">
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-ink-soft">Subir planilla (.xlsx)</span>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="text-sm text-ink-soft file:mr-3 file:rounded-lg file:border-0 file:bg-lavender-bg file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand hover:file:bg-lavender/40"
-          />
+          <input ref={fileRef} type="file" accept=".xlsx,.xls"
+            className="text-sm text-ink-soft file:mr-3 file:rounded-lg file:border-0 file:bg-lavender-bg file:px-3 file:py-2 file:text-sm file:font-semibold file:text-brand" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-ink-soft">Hojas (opcional, ej: CC Santander, CC BICE)</span>
-          <input
-            ref={sheetsFilterRef}
-            type="text"
-            placeholder="todas las hojas reconocibles"
-            className="w-64 rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand"
-          />
+          <span className="text-xs font-medium text-ink-soft">Hojas (opcional)</span>
+          <input ref={hojasRef} type="text" placeholder="todas las reconocibles"
+            className="w-52 rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand" />
         </label>
-        <button
-          type="submit"
-          disabled={uploading}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-deep disabled:opacity-60"
-        >
-          {uploading ? "Procesando…" : "Subir a " + companyCode}
+        <button type="submit" disabled={subiendo}
+          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-deep disabled:opacity-60">
+          {subiendo ? "Procesando…" : `Subir a ${companyCode}`}
         </button>
-        {uploadMsg && (
-          <p className={`text-sm ${uploadMsg.includes("✓") ? "text-ok" : "text-danger"}`}>{uploadMsg}</p>
-        )}
+        <a href={`/api/bancos/nomina?empresa=${companyCode}`} download
+          className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-lavender-bg">
+          Descargar Excel
+        </a>
+        <button type="button" onClick={() => setVerBitacora((v) => !v)}
+          className="rounded-lg border border-line px-4 py-2 text-sm font-medium text-ink-soft hover:bg-soft">
+          {verBitacora ? "Ocultar bitácora" : "Ver bitácora"}
+        </button>
       </form>
+
+      {error && <p className="rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger" role="alert">{error}</p>}
+      {aviso && <p className="rounded-lg bg-ok-bg px-3.5 py-2.5 text-sm text-ok" role="status">{aviso}</p>}
+
+      {/* Bitácora */}
+      {verBitacora && (
+        <section className="rounded-xl border border-line bg-white">
+          <h2 className="border-b border-line px-5 py-3 text-sm font-bold uppercase tracking-wide text-brand">
+            Bitácora — quién hizo qué y cuándo
+          </h2>
+          {bitacora.length === 0 ? (
+            <p className="px-5 py-6 text-sm text-ink-soft">Todavía no hay movimientos registrados.</p>
+          ) : (
+            <ul className="max-h-96 divide-y divide-line/70 overflow-y-auto">
+              {bitacora.map((e) => (
+                <li key={e.id} className="px-5 py-2.5 text-sm">
+                  <span className="font-medium text-ink">{e.quien}</span>{" "}
+                  <span className="text-ink-soft">{e.accion} · {e.cuando}</span>
+                  {e.detalle && <p className="mt-0.5 text-xs text-ink-soft">{e.detalle}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Lotes de transferencia */}
+      {lotes.length > 0 && (
+        <section className="rounded-xl border border-line bg-white">
+          <h2 className="border-b border-line px-5 py-3 text-sm font-bold uppercase tracking-wide text-brand">
+            Lotes de transferencia
+          </h2>
+          <ul className="divide-y divide-line/70">
+            {lotes.map((l) => (
+              <li key={l.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">
+                    {l.numero} · {l.pagos} pago(s) · {formatMoney(l.total, "CLP")}
+                    <span className={`ml-2 rounded-full border px-2 py-0.5 text-xs font-medium ${
+                      l.status === "TRANSFERIDO" ? ESTADO_CHIP.TRANSFERIDO
+                        : l.status === "COMPROBANTE_SUBIDO" ? ESTADO_CHIP.EN_TRANSFERENCIA : ESTADO_CHIP.LIBERADO}`}>
+                      {LOTE_TEXTO[l.status] ?? l.status}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-xs text-ink-soft">
+                    Liberado por {l.liberadoPor} · {l.liberadoEl}
+                    {l.comprobante && ` — comprobante “${l.comprobante}” por ${l.comprobantePor}`}
+                    {l.transferidoEl && ` — transferido por ${l.transferidoPor} · ${l.transferidoEl}`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a href={`/api/bancos/nomina?lote=${l.id}`} download
+                    className="rounded-lg border border-brand px-3 py-1.5 text-xs font-semibold text-brand hover:bg-lavender-bg">
+                    Nómina Excel
+                  </a>
+                  {permisos.comprobante && l.status !== "TRANSFERIDO" && (
+                    <label className="cursor-pointer rounded-lg bg-lavender-bg px-3 py-1.5 text-xs font-semibold text-brand hover:opacity-90">
+                      {l.comprobante ? "Reemplazar comprobante" : "Subir transferencia"}
+                      <input type="file" className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) correr(() => registrarComprobante(l.id, f.name), `Comprobante de ${l.numero} registrado`);
+                          e.target.value = "";
+                        }} />
+                    </label>
+                  )}
+                  {permisos.libera && l.status === "COMPROBANTE_SUBIDO" && (
+                    <button type="button" onClick={() => correr(() => marcarTransferida(l.id), `${l.numero} marcado como transferido`)}
+                      className="rounded-lg bg-ok px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90">
+                      Marcar transferida
+                    </button>
+                  )}
+                  {permisos.libera && l.status === "LIBERADO" && (
+                    <button type="button"
+                      onClick={() => { if (window.confirm(`¿Deshacer la liberación de ${l.numero}?`)) correr(() => deshacerLiberacion(l.id), `${l.numero} devuelto a pendiente`); }}
+                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-danger-bg hover:text-danger">
+                      Deshacer
+                    </button>
+                  )}
+                  {permisos.libera && l.status === "TRANSFERIDO" && (
+                    <button type="button"
+                      onClick={() => { if (window.confirm(`¿Revertir la transferencia de ${l.numero}?`)) correr(() => revertirTransferencia(l.id), `${l.numero} revertido`); }}
+                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-warn-bg hover:text-warn">
+                      Revertir
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {sheets.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line bg-white p-10 text-center">
-          <p className="text-sm text-ink-soft">
-            No hay planillas cargadas para esta empresa. Subí la primera con el formulario de arriba.
-          </p>
+          <p className="text-sm text-ink-soft">No hay planillas cargadas. Subí la primera con el formulario de arriba.</p>
         </div>
       ) : (
         <>
-          {/* Selector de planillas */}
           <div className="flex flex-wrap gap-2">
             {sheets.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => selectSheet(s.id)}
+              <button key={s.id} type="button" onClick={() => irAPlanilla(s.id)}
                 className={`rounded-lg border px-3.5 py-2 text-left transition ${
-                  s.id === selectedSheetId
-                    ? "border-brand bg-lavender-bg"
-                    : "border-line bg-white hover:border-lavender"
-                }`}
-              >
+                  s.id === selectedSheetId ? "border-brand bg-lavender-bg" : "border-line bg-white hover:border-lavender"}`}>
                 <p className="text-sm font-semibold text-ink">{s.name}</p>
                 <p className="text-xs text-ink-soft">
-                  {s.total} movs ·{" "}
-                  {(s.id === selectedSheetId ? stats.pending : s.pending) > 0
-                    ? `${s.id === selectedSheetId ? stats.pending : s.pending} pendientes`
-                    : "todo liberado"}{" "}
-                  · {s.createdAt}
+                  {s.total} movs · {(s.id === selectedSheetId ? stats.pendientes : s.pending) > 0
+                    ? `${s.id === selectedSheetId ? stats.pendientes : s.pending} por liberar` : "sin pendientes"}
                 </p>
               </button>
             ))}
           </div>
 
-          {/* Resumen + filtros */}
+          {/* Barra de acción del dueño */}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-white px-4 py-3">
-            <div className="flex flex-wrap gap-5 text-sm">
-              <span>
-                <span className="text-xs uppercase tracking-wide text-ink-soft">Pendientes </span>
-                <strong className="text-warn">{stats.pending}</strong>
-                <span className="text-ink-soft"> · {formatMoney(stats.pendingAmount, "CLP")}</span>
-              </span>
-              <span>
-                <span className="text-xs uppercase tracking-wide text-ink-soft">Liberados </span>
-                <strong className="text-ok">{stats.releasedCount}</strong>
-                <span className="text-ink-soft"> · {formatMoney(stats.releasedAmount, "CLP")}</span>
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <span><span className="text-xs uppercase tracking-wide text-ink-soft">Por liberar </span>
+                <strong className="text-warn">{stats.pendientes}</strong>
+                <span className="text-ink-soft"> · {formatMoney(stats.montoPendiente, "CLP")}</span></span>
+              <span className="text-xs text-ink-soft">
+                {stats.liberados} liberados · {stats.enTransferencia} en transferencia · {stats.transferidos} transferidos
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar proveedor, RUT, descripción…"
-                className="w-60 rounded-lg border border-line px-3 py-1.5 text-sm outline-none focus:border-brand"
-              />
-              {(["todos", "pendientes", "liberados"] as Filter[]).map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setFilter(f)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold capitalize transition ${
-                    filter === f ? "bg-brand text-white" : "border border-line text-ink-soft hover:bg-soft"
-                  }`}
-                >
-                  {f}
+              <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar proveedor, RUT…" aria-label="Buscar movimientos"
+                className="w-52 rounded-lg border border-line px-3 py-1.5 text-sm outline-none focus:border-brand" />
+              {(["todos", "pendientes", "liberados", "en_transferencia", "transferidos"] as Filtro[]).map((f) => (
+                <button key={f} type="button" onClick={() => setFiltro(f)} aria-pressed={filtro === f}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    filtro === f ? "bg-brand text-white" : "border border-line text-ink-soft hover:bg-soft"}`}>
+                  {f === "en_transferencia" ? "en transferencia" : f}
                 </button>
               ))}
             </div>
           </div>
 
-          {error && <p className="rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger">{error}</p>}
+          {permisos.libera && seleccion.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand bg-lavender-bg px-4 py-3">
+              <div className="text-sm text-brand-dark">
+                <p>
+                  <strong>{seleccion.size}</strong> pago(s) seleccionado(s) ·{" "}
+                  <strong>{formatMoney(totalSeleccionado, "CLP")}</strong>
+                </p>
+                {incompletosSeleccionados > 0 && (
+                  <p className="mt-0.5 text-xs text-warn">
+                    ⚠ {incompletosSeleccionados} sin RUT, banco o cuenta — el banco los rechaza.
+                    Completalos con “Editar” antes de llevar la nómina.
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setSeleccion(new Set())}
+                  className="rounded-lg border border-line bg-white px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-soft">
+                  Limpiar
+                </button>
+                <button type="button"
+                  onClick={() => {
+                    if (!window.confirm(`¿Liberar ${seleccion.size} pago(s) por ${formatMoney(totalSeleccionado, "CLP")}? Se creará un lote de transferencia.`)) return;
+                    correr(async () => {
+                      const r = await liberarPagos([...seleccion]);
+                      return r.ok ? { ok: true } : r;
+                    }, "Pagos liberados: se creó el lote y ya podés descargar la nómina");
+                  }}
+                  className="rounded-lg bg-brand px-4 py-1.5 text-sm font-semibold text-white hover:bg-brand-deep">
+                  Liberar y crear lote
+                </button>
+              </div>
+            </div>
+          )}
 
-          {/* Tabla de movimientos */}
+          {/* Tabla */}
           <section className="overflow-hidden rounded-xl border border-line bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="min-w-max border-collapse text-left">
                 <thead className="bg-soft text-xs font-semibold uppercase tracking-wide text-ink-soft">
                   <tr>
+                    <th className="border-b border-line px-3 py-3">
+                      {permisos.libera && seleccionables.length > 0 && (
+                        <input type="checkbox" aria-label="Seleccionar todos los pendientes visibles"
+                          checked={seleccionables.length > 0 && seleccionables.every((m) => seleccion.has(m.id))}
+                          onChange={(e) => setSeleccion(e.target.checked ? new Set(seleccionables.map((m) => m.id)) : new Set())}
+                          className="h-4 w-4 accent-brand" />
+                      )}
+                    </th>
                     <th className="border-b border-line px-3 py-3">Fecha</th>
                     <th className="border-b border-line px-3 py-3">Referencia</th>
                     <th className="border-b border-line px-3 py-3">Descripción</th>
                     <th className="border-b border-line px-3 py-3 text-right">Monto</th>
                     <th className="border-b border-line px-3 py-3">Datos bancarios</th>
                     <th className="border-b border-line px-3 py-3">Estado</th>
+                    <th className="border-b border-line px-3 py-3" />
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-6 py-10 text-center text-sm text-ink-soft">
-                        Sin movimientos {filter !== "todos" ? `(filtro: ${filter})` : ""}
-                      </td>
-                    </tr>
+                  {visibles.length === 0 && (
+                    <tr><td colSpan={8} className="px-6 py-10 text-center text-sm text-ink-soft">Sin movimientos con este filtro</td></tr>
                   )}
-                  {visible.map((m) => (
-                    <MovementRow key={m.id} m={m} onToggle={onToggle} />
+                  {visibles.map((m) => (
+                    <MovementRow key={m.id} m={m} seleccionado={seleccion.has(m.id)}
+                      puedeSeleccionar={permisos.libera} puedeEditar={permisos.edita}
+                      onSeleccionar={onSeleccionar} onEditar={setEditando} />
                   ))}
                 </tbody>
               </table>
             </div>
             <p className="border-t border-line px-4 py-2 text-xs text-ink-soft">
-              {visible.length} de {movements.length} movimientos
+              {visibles.length} de {movements.length} movimientos · sesión de {quienSoy}
             </p>
           </section>
 
-          {/* Eliminar planilla */}
-          {selectedSheetId && (
+          {permisos.edita && selectedSheetId && (
             <div className="flex justify-end">
-              <button
-                type="button"
-                disabled={deleting}
+              <button type="button"
                 onClick={() => {
-                  if (deleting) return;
                   if (!window.confirm("¿Eliminar esta planilla completa con todos sus movimientos?")) return;
-                  setDeleting(true);
-                  startTransition(async () => {
-                    const result = await deleteSheet(selectedSheetId);
-                    setDeleting(false);
-                    if (!result.ok) setError(result.error);
-                    else {
-                      // Conserva ?empresa= (el admin no debe rebotar a otra empresa)
-                      const params = new URLSearchParams(searchParams.toString());
-                      params.delete("planilla");
-                      router.push(params.toString() ? `${pathname}?${params.toString()}` : pathname);
-                    }
-                  });
+                  correr(() => deleteSheet(selectedSheetId), "Planilla eliminada");
                 }}
-                className="rounded-lg px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-danger-bg hover:text-danger"
-              >
-                {deleting ? "Eliminando…" : "Eliminar planilla seleccionada"}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-danger-bg hover:text-danger">
+                Eliminar planilla seleccionada
               </button>
             </div>
           )}
         </>
       )}
+
+      {editando && (
+        <EditorMovimiento
+          m={editando}
+          onCerrar={() => setEditando(null)}
+          onGuardar={(datos) => {
+            correr(() => editarMovimiento(editando.id, datos), "Movimiento actualizado (queda en la bitácora)");
+            setEditando(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────── Editor ───────────────────────────
+
+function EditorMovimiento({
+  m, onCerrar, onGuardar,
+}: {
+  m: MovementView;
+  onCerrar: () => void;
+  onGuardar: (datos: Record<string, string>) => void;
+}) {
+  const [f, setF] = useState({
+    date: m.date ?? "", reference: m.reference ?? "", description: m.description ?? "",
+    debit: m.debit, credit: m.credit, rut: m.rut ?? "", bankName: m.bankName ?? "",
+    accountNumber: m.accountNumber ?? "", accountType: m.accountType ?? "", email: m.email ?? "",
+    categoryGeneral: m.categoryGeneral ?? "", businessCenter: m.businessCenter ?? "",
+  });
+  const campo = "w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand";
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" role="dialog" aria-modal="true">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+        <h2 className="text-lg font-bold text-ink">Editar movimiento</h2>
+        <p className="mt-1 text-sm text-ink-soft">
+          Cada cambio queda registrado en la bitácora con su valor anterior.
+          {m.estado === "TRANSFERIDO" && " Este pago ya fue transferido: se registrará como corrección."}
+        </p>
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Fecha</span>
+            <input type="date" value={f.date} onChange={set("date")} className={campo} /></label>
+          <label className="flex flex-col gap-1 md:col-span-2"><span className="text-xs text-ink-soft">Referencia / proveedor</span>
+            <input value={f.reference} onChange={set("reference")} className={campo} /></label>
+          <label className="flex flex-col gap-1 md:col-span-3"><span className="text-xs text-ink-soft">Descripción</span>
+            <input value={f.description} onChange={set("description")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Egreso (a pagar)</span>
+            <input value={f.debit} onChange={set("debit")} inputMode="decimal" className={`${campo} cell-num`} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Abono</span>
+            <input value={f.credit} onChange={set("credit")} inputMode="decimal" className={`${campo} cell-num`} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">RUT</span>
+            <input value={f.rut} onChange={set("rut")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Banco</span>
+            <input value={f.bankName} onChange={set("bankName")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Tipo de cuenta</span>
+            <input value={f.accountType} onChange={set("accountType")} placeholder="Cuenta Corriente" className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">N° de cuenta</span>
+            <input value={f.accountNumber} onChange={set("accountNumber")} className={`${campo} cell-num`} /></label>
+          <label className="flex flex-col gap-1 md:col-span-2"><span className="text-xs text-ink-soft">Correo</span>
+            <input value={f.email} onChange={set("email")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Categoría</span>
+            <input value={f.categoryGeneral} onChange={set("categoryGeneral")} className={campo} /></label>
+          <label className="flex flex-col gap-1 md:col-span-2"><span className="text-xs text-ink-soft">Centro de negocio</span>
+            <input value={f.businessCenter} onChange={set("businessCenter")} className={campo} /></label>
+        </div>
+        <div className="mt-6 flex gap-3">
+          <button type="button" onClick={() => onGuardar(f)}
+            className="rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-deep">Guardar cambios</button>
+          <button type="button" onClick={onCerrar}
+            className="rounded-lg border border-line px-5 py-2 text-sm font-medium text-ink-soft hover:bg-soft">Cancelar</button>
+        </div>
+      </div>
     </div>
   );
 }

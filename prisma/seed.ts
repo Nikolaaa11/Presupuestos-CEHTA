@@ -28,6 +28,8 @@ const COMPANIES = [
   { code: "EVOQUE",   name: "EVOQUE Energy",                 type: "PORTFOLIO",      sector: "ESCO — eficiencia energética industrial" },
   { code: "REVTECH",  name: "RevTech — Green Mining",        type: "PORTFOLIO",      sector: "Minería circular y óxidos de cobre" },
   { code: "TRONGKAI", name: "Trongkai — Agrosphere",         type: "PORTFOLIO",      sector: "Bioeconomía circular e ingredientes funcionales" },
+  // Décima entidad (cédula RUT serie 202608515891, emitida 08-06-2026)
+  { code: "PANIMAVIDA", name: "PANIMAVIDA ENERGY SPA",        type: "PORTFOLIO",      sector: "Generación, transmisión y distribución de energía eléctrica — Colbún", rut: "78.214.693-9" },
 ] as const;
 
 const EXPENSE_CATEGORIES = [
@@ -58,7 +60,7 @@ async function main() {
   for (const c of COMPANIES) {
     companies[c.code] = await prisma.company.upsert({
       where: { code: c.code },
-      update: { name: c.name, type: c.type, sector: c.sector },
+      update: { name: c.name, type: c.type, sector: c.sector, rut: "rut" in c ? c.rut : undefined },
       create: c,
     });
   }
@@ -78,6 +80,19 @@ async function main() {
       companyId: null,
     },
   });
+
+  // Circuito de pagos: el dueño libera y confirma; la administradora sube el
+  // comprobante de la transferencia.
+  for (const [email, name, role] of [
+    ["guido@cehta.cl", "Guido Rietta (dueño)", "DUENO"],
+    ["vicky@cehta.cl", "Vicky (administradora)", "ADMINISTRADORA"],
+  ] as const) {
+    await prisma.user.upsert({
+      where: { email },
+      update: { role, active: true, name },
+      create: { email, passwordHash: adminHash, name, role, companyId: null },
+    });
+  }
 
   const demoUsers: Record<string, { id: string }> = {};
   for (const c of COMPANIES) {

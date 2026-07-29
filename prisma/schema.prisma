@@ -21,13 +21,16 @@ enum CompanyType {
 
 model Company {
   id         String      @id @default(cuid())
-  code       String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI
+  code       String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI, PANIMAVIDA
   name       String
+  rut        String? // necesario para la nómina bancaria de transferencias
   type       CompanyType
   sector     String?
   users      User[]
   budgets    Budget[]
   bankSheets BankSheet[]
+  transferBatches TransferBatch[]
+  bankEvents      BankEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -36,6 +39,8 @@ model Company {
 enum Role {
   FUND_ADMIN      // AFIS/FIP: ve todo, aprueba, administra
   COMPANY_MANAGER // gerente: edita el presupuesto de SU empresa
+  DUENO           // Guido: libera pagos y confirma que se transfirieron
+  ADMINISTRADORA  // Vicky: sube el comprobante de transferencia del lote
   FUND_ANALYST    // fase 2: analista del fondo (solo lectura ampliada)
   VIEWER          // fase 2
 }
@@ -54,6 +59,10 @@ model User {
   fxRatesUpdated FxRate[]
   bankSheetsUploaded BankSheet[]
   bankMovementsReleased BankMovement[]
+  batchesReleased    TransferBatch[] @relation("BatchReleasedBy")
+  batchesProofed     TransferBatch[] @relation("BatchProofBy")
+  batchesTransferred TransferBatch[] @relation("BatchTransferredBy")
+  bankEvents         BankEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -344,10 +353,110 @@ model BankMovement {
   releasedById String?
   releasedBy   User?     @relation(fields: [releasedById], references: [id], onDelete: SetNull)
 
+  /**
+   * Circuito de pagos (mandato del directorio):
+   * PENDIENTE → LIBERADO (dueño) → EN_TRANSFERENCIA (administradora sube el
+   * comprobante) → TRANSFERIDO (dueño confirma). `released` se mantiene en
+   * sincronía para no romper lo existente: es true desde LIBERADO en adelante.
+   */
+  estado  MovementStatus @default(PENDIENTE)
+  batchId String?
+  batch   TransferBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  events BankEvent[]
+
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([sheetId])
   @@index([sheetId, released])
+  @@index([batchId])
+  @@index([sheetId, estado])
+}
+
+// ───────────────────── Lotes de transferencia y bitácora ─────────────────────
+
+enum MovementStatus {
+  PENDIENTE
+  LIBERADO
+  EN_TRANSFERENCIA
+  TRANSFERIDO
+}
+
+enum BatchStatus {
+  LIBERADO          // el dueño autorizó los pagos
+  COMPROBANTE_SUBIDO // la administradora adjuntó la transferencia
+  TRANSFERIDO       // el dueño confirmó que la plata salió
+}
+
+/**
+ * Agrupa todos los pagos que el dueño liberó de una vez. Es la unidad de
+ * trabajo de la administradora: un comprobante y una confirmación por lote.
+ * De acá sale el Excel de nómina bancaria para la carga masiva.
+ */
+model TransferBatch {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  number    Int // correlativo por empresa: LOTE-001, LOTE-002…
+
+  status BatchStatus @default(LIBERADO)
+  note   String?
+
+  releasedById String?
+  releasedBy   User?    @relation("BatchReleasedBy", fields: [releasedById], references: [id], onDelete: SetNull)
+  releasedAt   DateTime @default(now())
+
+  proofFileName   String?
+  proofUploadedAt DateTime?
+  proofUploadedById String?
+  proofUploadedBy   User?  @relation("BatchProofBy", fields: [proofUploadedById], references: [id], onDelete: SetNull)
+
+  transferredAt   DateTime?
+  transferredById String?
+  transferredBy   User?     @relation("BatchTransferredBy", fields: [transferredById], references: [id], onDelete: SetNull)
+
+  movements BankMovement[]
+  events    BankEvent[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+enum BankAction {
+  LIBERADO
+  LIBERACION_DESHECHA
+  COMPROBANTE_SUBIDO
+  TRANSFERIDO
+  TRANSFERENCIA_REVERTIDA
+  MOVIMIENTO_EDITADO
+  PLANILLA_IMPORTADA
+  PLANILLA_ELIMINADA
+}
+
+/**
+ * Bitácora del módulo Bancos: append-only. Nunca se actualiza ni se borra;
+ * es la prueba de quién autorizó y quién movió cada peso.
+ */
+model BankEvent {
+  id          String     @id @default(cuid())
+  companyId   String
+  company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movementId  String?
+  movement    BankMovement? @relation(fields: [movementId], references: [id], onDelete: Cascade)
+  batchId     String?
+  batch       TransferBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  actorUserId String?
+  actor       User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action      BankAction
+  detail      String? // ej. "monto: 350.000 → 380.000"
+  createdAt   DateTime   @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([movementId])
+  @@index([batchId])
 }
 
 model FxRate {

@@ -1,7 +1,13 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
 import { prisma } from "@/lib/prisma";
 import { resolveViewCompany } from "@/lib/budget";
-import { BancosClient, type MovementView, type SheetView } from "./bancos-client";
+import { ETIQUETA_ACCION, puede, ROLES_DUENO, ROLES_COMPROBANTE, ROLES_EDICION } from "@/lib/tesoreria";
+import { BancosClient, type BitacoraEntry, type LoteView, type MovementView, type SheetView } from "./bancos-client";
+
+const fechaHora = (d: Date) =>
+  new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
+const fechaCorta = (d: Date) =>
+  new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
 
 export default async function BancosPage({
   searchParams,
@@ -11,55 +17,62 @@ export default async function BancosPage({
   const { empresa, planilla } = await searchParams;
   const { user, company } = await resolveViewCompany(empresa);
 
-  const [sheets, companies] = await Promise.all([
+  const [sheets, companies, lotes, bitacora, pendingGroups] = await Promise.all([
     prisma.bankSheet.findMany({
       where: { companyId: company.id },
       orderBy: { createdAt: "desc" },
+      include: { uploadedBy: { select: { name: true } }, _count: { select: { movements: true } } },
+    }),
+    user.role === "COMPANY_MANAGER"
+      ? Promise.resolve([])
+      : prisma.company.findMany({ orderBy: { code: "asc" }, select: { code: true, name: true } }),
+    prisma.transferBatch.findMany({
+      where: { companyId: company.id },
+      orderBy: { number: "desc" },
+      take: 20,
       include: {
-        uploadedBy: { select: { name: true } },
-        _count: { select: { movements: true } },
+        releasedBy: { select: { name: true } },
+        proofUploadedBy: { select: { name: true } },
+        transferredBy: { select: { name: true } },
+        movements: { select: { debit: true, credit: true } },
       },
     }),
-    user.role === "FUND_ADMIN"
-      ? prisma.company.findMany({ orderBy: { code: "asc" }, select: { code: true, name: true } })
-      : Promise.resolve([]),
+    prisma.bankEvent.findMany({
+      where: { companyId: company.id },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      include: { actor: { select: { name: true } } },
+    }),
+    prisma.bankMovement.groupBy({
+      by: ["sheetId"],
+      where: { estado: "PENDIENTE", sheet: { companyId: company.id } },
+      _count: { _all: true },
+    }),
   ]);
 
-  // Rendimiento: un groupBy cuenta los pendientes de todas las planillas de una
-  // vez, en vez de traer los ids de cada movimiento pendiente solo para medirlos.
-  const pendingBySheet = new Map(
-    (
-      await prisma.bankMovement.groupBy({
-        by: ["sheetId"],
-        where: { released: false, sheet: { companyId: company.id } },
-        _count: { _all: true },
-      })
-    ).map((g) => [g.sheetId, g._count._all]),
-  );
+  const pendingBySheet = new Map(pendingGroups.map((g) => [g.sheetId, g._count._all]));
 
   const sheetViews: SheetView[] = sheets.map((s) => ({
     id: s.id,
     name: s.name,
     sourceFile: s.sourceFile,
     uploadedBy: s.uploadedBy?.name ?? "importación",
-    createdAt: new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric" }).format(s.createdAt),
+    createdAt: fechaCorta(s.createdAt),
     total: s._count.movements,
     pending: pendingBySheet.get(s.id) ?? 0,
   }));
 
-  // Por defecto se abre la planilla con más pagos pendientes: es lo que
-  // tesorería necesita ver primero (antes se abría la última cargada).
+  // Se abre la planilla con más pagos pendientes: es lo que tesorería mira primero.
   const defaultSheet = [...sheetViews].sort((a, b) => b.pending - a.pending || b.total - a.total)[0];
-  const selectedSheetId = planilla && sheetViews.some((s) => s.id === planilla)
-    ? planilla
-    : defaultSheet?.id ?? null;
+  const selectedSheetId =
+    planilla && sheetViews.some((s) => s.id === planilla) ? planilla : defaultSheet?.id ?? null;
 
   let movements: MovementView[] = [];
   if (selectedSheetId) {
     const rows = await prisma.bankMovement.findMany({
       where: { sheetId: selectedSheetId },
       orderBy: { rowIndex: "asc" },
-      include: { releasedBy: { select: { name: true } } },
+      include: { batch: { select: { number: true } } },
     });
     movements = rows.map((m) => ({
       id: m.id,
@@ -74,28 +87,49 @@ export default async function BancosPage({
       rut: m.rut,
       bankName: m.bankName,
       accountNumber: m.accountNumber,
-      docType: m.docType,
-      docNumber: m.docNumber,
+      accountType: m.accountType,
       email: m.email,
-      link: m.link,
-      released: m.released,
-      releasedBy: m.releasedBy?.name ?? null,
-      releasedAt: m.releasedAt
-        ? new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(m.releasedAt)
-        : null,
+      estado: m.estado,
+      lote: m.batch ? `LOTE-${String(m.batch.number).padStart(3, "0")}` : null,
     }));
   }
+
+  const loteViews: LoteView[] = lotes.map((l) => ({
+    id: l.id,
+    numero: `LOTE-${String(l.number).padStart(3, "0")}`,
+    status: l.status,
+    pagos: l.movements.length,
+    total: l.movements
+      .reduce((a, m) => a + (Math.abs(Number(m.debit.toString())) || Math.abs(Number(m.credit.toString()))), 0)
+      .toString(),
+    liberadoPor: l.releasedBy?.name ?? "—",
+    liberadoEl: fechaHora(l.releasedAt),
+    comprobante: l.proofFileName,
+    comprobantePor: l.proofUploadedBy?.name ?? null,
+    transferidoPor: l.transferredBy?.name ?? null,
+    transferidoEl: l.transferredAt ? fechaHora(l.transferredAt) : null,
+    nota: l.note,
+  }));
+
+  const bitacoraViews: BitacoraEntry[] = bitacora.map((e) => ({
+    id: e.id,
+    quien: e.actor?.name ?? "sistema",
+    accion: ETIQUETA_ACCION[e.action] ?? e.action,
+    detalle: e.detail,
+    cuando: fechaHora(e.createdAt),
+  }));
 
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-ink">Bancos</h1>
+          <h1 className="text-2xl font-bold text-ink">Bancos y tesorería</h1>
           <p className="mt-1 text-sm text-ink-soft">
-            {company.name} — cartolas, transferencias y liberación de pagos
+            {company.name}
+            {company.rut ? ` · ${company.rut}` : ""} — liberación, transferencias y bitácora
           </p>
         </div>
-        {user.role === "FUND_ADMIN" && (
+        {user.role !== "COMPANY_MANAGER" && (
           <CompanySelector companies={companies} selectedCode={company.code} />
         )}
       </header>
@@ -105,6 +139,14 @@ export default async function BancosPage({
         sheets={sheetViews}
         selectedSheetId={selectedSheetId}
         movements={movements}
+        lotes={loteViews}
+        bitacora={bitacoraViews}
+        permisos={{
+          libera: puede(user, ROLES_DUENO),
+          comprobante: puede(user, ROLES_COMPROBANTE),
+          edita: puede(user, ROLES_EDICION),
+        }}
+        quienSoy={user.name ?? user.email ?? "vos"}
       />
     </div>
   );
