@@ -5,6 +5,7 @@ import { z, ZodError } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
 import { MONTH_KEYS } from "@/lib/money";
+import { puedeRevisar, puedeAprobar } from "@/lib/budget-policy";
 
 /**
  * Ciclo de vida del presupuesto (F4):
@@ -79,27 +80,67 @@ export async function submitBudget(budgetId: string, comment?: string): Promise<
   }
 }
 
-/** El fondo aprueba u observa un presupuesto ENVIADO. */
+/**
+ * Revisión y aprobación del presupuesto, con las mismas manos que el circuito
+ * de pagos: el encargado envía, **Victoria (administradora) revisa** y
+ * **Guido (dueño) aprueba**. Cualquiera de los dos puede observar y devolverlo
+ * a edición. El FUND_ADMIN puede hacer las dos cosas (administra la plataforma).
+ *
+ *   BORRADOR ─envía→ ENVIADO ─revisa→ REVISADO ─aprueba→ APROBADO
+ *              (encargado)   (Victoria)         (Guido)
+ */
+
 export async function reviewBudget(
   budgetId: string,
-  decision: "APROBAR" | "OBSERVAR",
+  decision: "REVISAR" | "APROBAR" | "OBSERVAR",
   comment: string,
 ): Promise<Result> {
   try {
     const user = await requireUser();
-    if (user.role !== "FUND_ADMIN") throw new Error("Solo el fondo puede revisar presupuestos");
-    if (decision !== "APROBAR" && decision !== "OBSERVAR") throw new Error("Decisión inválida");
+    if (!["REVISAR", "APROBAR", "OBSERVAR"].includes(decision)) throw new Error("Decisión inválida");
+
+    const permitido =
+      decision === "APROBAR" ? puedeAprobar(user.role) : puedeRevisar(user.role);
+    if (!permitido) {
+      throw new Error(
+        decision === "APROBAR"
+          ? "Solo el dueño puede aprobar el presupuesto"
+          : "Tu rol no permite revisar presupuestos",
+      );
+    }
 
     const parsedComment =
       decision === "OBSERVAR" ? requiredCommentSchema.parse(comment) : commentSchema.parse(comment ?? "");
 
     const budget = await prisma.budget.findUnique({ where: { id: budgetId } });
     if (!budget) throw new Error("Presupuesto no encontrado");
-    if (budget.status !== "ENVIADO") {
-      throw new Error("Solo se puede revisar un presupuesto en estado enviado");
-    }
 
-    if (decision === "APROBAR") {
+    if (decision === "REVISAR") {
+      if (budget.status !== "ENVIADO") throw new Error("Solo se puede revisar un presupuesto enviado");
+      await prisma.$transaction([
+        prisma.budget.update({ where: { id: budgetId }, data: { status: "REVISADO" } }),
+        prisma.approvalEvent.create({
+          data: { budgetId, actorUserId: user.id, action: "REVISADO", comment: parsedComment || null },
+        }),
+      ]);
+    } else if (decision === "APROBAR") {
+      // El dueño aprueba lo que la administradora ya revisó.
+      if (budget.status !== "REVISADO") {
+        throw new Error("No se puede aprobar: falta la revisión de la administradora");
+      }
+      // Cuatro ojos: el dueño también tiene facultad de revisar (para que el
+      // circuito no se trabe si la administradora no está), pero entonces podría
+      // firmar los dos pasos solo. Quien revisó no puede además aprobar.
+      const revision = await prisma.approvalEvent.findFirst({
+        where: { budgetId, action: "REVISADO" },
+        orderBy: { createdAt: "desc" },
+        select: { actorUserId: true },
+      });
+      if (revision?.actorUserId === user.id) {
+        throw new Error(
+          "No se puede aprobar una revisión propia: la aprobación la firma otra persona",
+        );
+      }
       await prisma.$transaction([
         prisma.budget.update({
           where: { id: budgetId },
@@ -114,6 +155,9 @@ export async function reviewBudget(
         }),
       ]);
     } else {
+      if (budget.status !== "ENVIADO" && budget.status !== "REVISADO") {
+        throw new Error("Solo se puede observar un presupuesto enviado o revisado");
+      }
       await prisma.$transaction([
         prisma.budget.update({ where: { id: budgetId }, data: { status: "OBSERVADO" } }),
         prisma.approvalEvent.create({
@@ -137,7 +181,10 @@ export async function reviewBudget(
 export async function reopenBudget(budgetId: string, comment: string): Promise<Result> {
   try {
     const user = await requireUser();
-    if (user.role !== "FUND_ADMIN") throw new Error("Solo el fondo puede reabrir un presupuesto aprobado");
+    // Reabrir lo ya aprobado es facultad del dueño (crea una versión nueva).
+    if (!puedeAprobar(user.role)) {
+      throw new Error("Solo el dueño puede reabrir un presupuesto aprobado");
+    }
     const parsedComment = requiredCommentSchema.parse(comment);
 
     const budget = await prisma.budget.findUnique({

@@ -68,7 +68,8 @@ export function ManagerApprovalPanel({
         </div>
       ) : (
         <p className="text-sm text-ink-soft">
-          {status === "ENVIADO" && "Tu presupuesto está en revisión del fondo. Quedó en solo lectura."}
+          {status === "ENVIADO" && "Enviado: administración lo está revisando. Quedó en solo lectura."}
+          {status === "REVISADO" && "Revisado por administración — esperando la aprobación del dueño."}
           {status === "APROBADO" && "Presupuesto aprobado por el fondo — versión inmutable de auditoría."}
           {status === "CERRADO" && "Presupuesto cerrado."}
         </p>

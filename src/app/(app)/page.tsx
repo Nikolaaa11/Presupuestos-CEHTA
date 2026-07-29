@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
 import { BUDGET_YEAR } from "@/lib/budget";
+import { puedeRevisar, puedeAprobar } from "@/lib/budget-policy";
 import { StatusBadge } from "@/components/status-badge";
 import { ManagerApprovalPanel } from "@/components/approval/manager-panel";
 import { AdminBudgetActions } from "@/components/approval/admin-actions";
@@ -13,6 +14,7 @@ const FX_FALLBACK = { ufToClp: "39200", usdToClp: "950" };
 
 const ACTION_LABELS: Record<string, string> = {
   ENVIADO: "envió el presupuesto",
+  REVISADO: "revisó el presupuesto (visto bueno)",
   OBSERVADO: "observó el presupuesto",
   APROBADO: "aprobó el presupuesto",
   RECHAZADO: "rechazó",
@@ -32,12 +34,26 @@ export default async function DashboardPage() {
   if (user.role === "COMPANY_MANAGER" && user.companyId) {
     return <ManagerDashboard companyId={user.companyId} />;
   }
-  return <AdminDashboard puedeAprobar={user.role === "FUND_ADMIN"} />;
+  return (
+    <AdminDashboard
+      userId={user.id}
+      puedeRevisar={puedeRevisar(user.role)}
+      puedeAprobar={puedeAprobar(user.role)}
+    />
+  );
 }
 
 // ─────────────────────────── Vista fondo ───────────────────────────
 
-async function AdminDashboard({ puedeAprobar }: { puedeAprobar: boolean }) {
+async function AdminDashboard({
+  userId,
+  puedeRevisar,
+  puedeAprobar,
+}: {
+  userId: string;
+  puedeRevisar: boolean;
+  puedeAprobar: boolean;
+}) {
   const companies = await prisma.company.findMany({
     orderBy: [{ type: "asc" }, { code: "asc" }],
     include: {
@@ -56,7 +72,8 @@ async function AdminDashboard({ puedeAprobar }: { puedeAprobar: boolean }) {
     },
   });
 
-  const pendings = companies.filter((c) => c.budgets[0]?.status === "ENVIADO").length;
+  const porRevisar = companies.filter((c) => c.budgets[0]?.status === "ENVIADO").length;
+  const porAprobar = companies.filter((c) => c.budgets[0]?.status === "REVISADO").length;
 
   return (
     <div>
@@ -67,11 +84,18 @@ async function AdminDashboard({ puedeAprobar }: { puedeAprobar: boolean }) {
             Estado de carga de las {companies.length} entidades del fondo
           </p>
         </div>
-        {pendings > 0 && (
-          <span className="rounded-full bg-lavender-bg px-3 py-1 text-xs font-semibold text-brand">
-            {pendings} presupuesto(s) esperando revisión
-          </span>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {porRevisar > 0 && (
+            <span className="rounded-full bg-warn-bg px-3 py-1 text-xs font-semibold text-warn">
+              {porRevisar} esperando revisión de administración
+            </span>
+          )}
+          {porAprobar > 0 && (
+            <span className="rounded-full bg-lavender-bg px-3 py-1 text-xs font-semibold text-brand">
+              {porAprobar} esperando aprobación del dueño
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -106,7 +130,13 @@ async function AdminDashboard({ puedeAprobar }: { puedeAprobar: boolean }) {
 
               {budget && (
                 <div className="mt-auto">
-                  {puedeAprobar && <AdminBudgetActions budgetId={budget.id} status={budget.status} />}
+                  <AdminBudgetActions
+                    budgetId={budget.id}
+                    status={budget.status}
+                    puedeRevisar={puedeRevisar}
+                    puedeAprobar={puedeAprobar}
+                    revisadoPorMi={lastEvent?.actorUserId === userId}
+                  />
                   <div className="mt-3 flex gap-3 border-t border-line pt-3 text-xs">
                     <Link className="font-medium text-brand hover:text-brand-deep" href={`/ventas?empresa=${c.code}`}>Ventas</Link>
                     <Link className="font-medium text-brand hover:text-brand-deep" href={`/gastos?empresa=${c.code}`}>Gastos</Link>

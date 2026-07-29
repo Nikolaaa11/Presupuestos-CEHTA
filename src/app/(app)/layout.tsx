@@ -1,6 +1,7 @@
 import { requireUser } from "@/lib/authz";
 import { signOut } from "@/auth";
 import { SidebarNav, type NavItem } from "@/components/sidebar-nav";
+import { BUDGET_YEAR } from "@/lib/budget";
 
 export default async function AppLayout({
   children,
@@ -64,7 +65,7 @@ export default async function AppLayout({
               {isAdmin ? "Vista fondo" : user.companyCode}
             </span>
             <span className="text-sm text-ink-soft">
-              Año presupuestario <strong className="text-ink">2027</strong>
+              Año presupuestario <strong className="text-ink">{BUDGET_YEAR}</strong>
             </span>
           </div>
         </header>

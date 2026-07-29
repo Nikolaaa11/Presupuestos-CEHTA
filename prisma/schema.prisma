@@ -70,9 +70,16 @@ model User {
 
 // ─────────────────────────────── Presupuesto ───────────────────────────────
 
+/**
+ * Ciclo del presupuesto, en paralelo al circuito de pagos:
+ *   BORRADOR ─envía→ ENVIADO ─revisa→ REVISADO ─aprueba→ APROBADO
+ *                      (encargado)   (Victoria)          (Guido)
+ * Cualquiera de los dos puede OBSERVAR y devolverlo a edición.
+ */
 enum BudgetStatus {
   BORRADOR
   ENVIADO
+  REVISADO // Victoria (administradora) dio el visto bueno; falta la aprobación del dueño
   OBSERVADO
   APROBADO
   CERRADO
@@ -276,6 +283,7 @@ model CapexItem {
 
 enum ApprovalAction {
   ENVIADO
+  REVISADO
   OBSERVADO
   APROBADO
   RECHAZADO

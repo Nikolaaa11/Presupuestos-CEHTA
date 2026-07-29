@@ -1,7 +1,10 @@
 import "server-only";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { requireUser, type SessionUser } from "@/lib/authz";
+import { requireUser } from "@/lib/authz";
+import { canEditBudget } from "@/lib/budget-policy";
+
+export { EDITABLE_STATUSES, isEditableStatus, canEditBudget, puedeRevisar, puedeAprobar } from "@/lib/budget-policy";
 
 /**
  * Reglas de negocio del ciclo presupuestario — fuente de verdad.
@@ -29,24 +32,6 @@ export function resolveYear(requested: string | undefined, available: number[]):
   if (Number.isInteger(parsed) && available.includes(parsed)) return parsed;
   if (available.includes(BUDGET_YEAR)) return BUDGET_YEAR;
   return available[0] ?? BUDGET_YEAR;
-}
-
-export const EDITABLE_STATUSES = ["BORRADOR", "OBSERVADO"] as const;
-
-export function isEditableStatus(status: string): boolean {
-  return (EDITABLE_STATUSES as readonly string[]).includes(status);
-}
-
-/** El gerente edita su empresa en estados editables; el admin nunca edita líneas. */
-export function canEditBudget(
-  user: Pick<SessionUser, "role" | "companyId">,
-  budget: { companyId: string; status: string },
-): boolean {
-  return (
-    user.role === "COMPANY_MANAGER" &&
-    user.companyId === budget.companyId &&
-    isEditableStatus(budget.status)
-  );
 }
 
 /**
