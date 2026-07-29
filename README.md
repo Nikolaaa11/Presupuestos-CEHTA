@@ -6,9 +6,9 @@ Plataforma de presupuestos anuales del fondo **CEHTA Capital** (FIP CEHTA ESG / 
 
 > *"Así como tenemos una plataforma para meter el voucher de los gastos, necesitamos una plataforma donde los gerentes puedan entrar y cargar todo esto... y con este flujo, ir al banco y decirle: finánciame a 18 meses."* — mandato del directorio, jul-2026
 
-## Las 9 entidades
+## Las 10 entidades
 
-AFIS (administradora) · FIP CEHTA ESG (fondo) · CENERGY · CSL · RHO · DTE · EVOQUE · REVTECH · TRONGKAI
+AFIS (administradora) · FIP CEHTA ESG (fondo) · CENERGY · CSL · RHO · DTE · EVOQUE · REVTECH · TRONGKAI · PANIMAVIDA ENERGY SPA
 
 ## Qué hace
 
@@ -20,7 +20,8 @@ AFIS (administradora) · FIP CEHTA ESG (fondo) · CENERGY · CSL · RHO · DTE �
 | **Caso bancable** | Para cada *iniciativa* (nuevo negocio), las ventas y gastos vinculados generan el flujo mensual y la cobertura de la cuota — la hoja imprimible que el gerente lleva al banco. |
 | **Ciclo de aprobación** | `BORRADOR → ENVIADO → (OBSERVADO ⇄) → APROBADO`. Lo aprobado es un **snapshot inmutable**; reabrir crea la versión siguiente. Todo queda en audit log. |
 | **Ejecución real** | Los Excel del fondo traen PROYECTADO vs REAL por mes, así que cada línea de venta y gasto guarda ambas series. Las grillas tienen un selector **Presupuesto / Real / Variación** y el dashboard y el consolidado muestran lo ejecutado además de lo presupuestado. |
-| **Consolidado** | Vista del fondo: semáforo de las 9 entidades, matriz mensual consolidada, mix contrato/proyección, pipeline CAPEX y **export Excel** (hoja por empresa + consolidado). |
+| **Consolidado** | Vista del fondo: semáforo de las 10 entidades, matriz mensual consolidada, mix contrato/proyección, pipeline CAPEX y **export Excel** (hoja por empresa + consolidado). |
+| **Circuito de pagos** | Tres manos con responsabilidades separadas: **Guido (dueño) libera** los pagos y se crea un **lote**; **Vicky (administradora) sube el comprobante** de la transferencia; **Guido confirma "transferida"**. Del lote sale la **nómina bancaria en Excel** para carga masiva (RUT, nombre, banco, tipo y n° de cuenta, monto, correo, glosa), que marca las filas incompletas que el banco rechazaría. Todo queda en una **bitácora** append-only: quién, qué, cuándo y el valor anterior de cada campo editado. |
 | **Bancos** | Cartolas y transferencias por empresa: **subida de planillas Excel** (detección automática de encabezados — soporta cartolas CC y detalles de transferencia), botón **Liberar/Liberado** por movimiento con auditoría (quién y cuándo), filtros pendientes/liberados, buscador y totales. Re-subir la misma hoja del mismo archivo la reemplaza (sin duplicados). |
 
 ## Stack
@@ -34,7 +35,7 @@ npm install                 # instala y genera el cliente Prisma (postinstall)
 cp .env.example .env        # revisá los valores
 npm run db:dev              # levanta Postgres local de Prisma (terminal aparte, queda corriendo)
 npm run db:apply            # aplica las migraciones (ver nota abajo)
-npm run db:seed             # 9 empresas + 10 usuarios demo + presupuesto ejemplo
+npm run db:seed             # 10 empresas + usuarios (incluye Guido y Vicky)
 npm run dev                 # http://localhost:3000
 ```
 
@@ -63,6 +64,8 @@ npx tsx scripts/import-excel-completo.ts  # FlujoII, programas, OCs y Hoja1
 | Usuario | Clave | Rol |
 |---|---|---|
 | `admin@cehta.cl` | `Cehta2026!` | Fondo (ve todo, aprueba, consolida, exporta) |
+| `guido@cehta.cl` | `Cehta2026!` | **Dueño** — libera pagos y confirma transferencias |
+| `vicky@cehta.cl` | `Cehta2026!` | **Administradora** — sube los comprobantes de transferencia |
 | `demo.rho@cehta.cl` | `Demo2026!` | Gerencia RHO (presupuestos 2025 y 2026, CAPEX, cartolas y OCs) |
 | `demo.afis@cehta.cl` | `Demo2026!` | Gerencia AFIS (gastos 2026 y transferencias por liberar) |
 | `demo.cenergy@cehta.cl` | `Demo2026!` | Gerencia CENERGY (transferencias por liberar) |
@@ -99,7 +102,7 @@ src/app/(app)/     dashboard · ventas · gastos · capex (+[id] caso bancable)
                    consolidado · configuracion · budget-actions.ts (aprobación)
 src/app/login/     autenticación
 src/components/    grillas, badges, paneles de aprobación
-specs/             SPEC-F*.md — briefs por fase (contrato Claude ↔ Codex)
+specs/             prompts maestros y briefs por fase (contrato Claude ↔ Codex)
 AGENTS.md          reglas para agentes de código (Codex las lee automático)
 ```
 
