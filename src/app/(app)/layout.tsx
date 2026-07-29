@@ -21,7 +21,19 @@ export default async function AppLayout({
           { href: "/configuracion", label: "Configuración" },
         ]
       : []),
+    { href: "/guia", label: "Guía" },
   ];
+
+  // Bajo el nombre va la empresa; los roles del fondo no tienen una, así que
+  // ahí mostramos qué son. Sin esto, Guido y Vicky veían un guion.
+  const ETIQUETA_ROL: Record<string, string> = {
+    FUND_ADMIN: "Fondo (AFIS/FIP)",
+    DUENO: "Dueño del fondo",
+    ADMINISTRADORA: "Administradora",
+    FUND_ANALYST: "Analista del fondo",
+    VIEWER: "Consulta",
+  };
+  const subtitulo = user.companyName ?? ETIQUETA_ROL[user.role] ?? "—";
 
   async function doSignOut() {
     "use server";
@@ -44,9 +56,7 @@ export default async function AppLayout({
 
         <div className="mt-auto border-t border-white/10 px-2 pt-4">
           <p className="truncate text-sm font-medium text-white">{user.name}</p>
-          <p className="truncate text-xs text-white/60">
-            {isAdmin ? "Fondo (AFIS/FIP)" : user.companyName ?? "—"}
-          </p>
+          <p className="truncate text-xs text-white/60">{subtitulo}</p>
           <form action={doSignOut} className="mt-3">
             <button
               type="submit"
@@ -62,7 +72,7 @@ export default async function AppLayout({
         <header className="flex items-center justify-between border-b border-line bg-white px-8 py-4 print:hidden">
           <div className="flex items-center gap-3">
             <span className="rounded-full bg-lavender-bg px-3 py-1 text-xs font-semibold text-brand">
-              {isAdmin ? "Vista fondo" : user.companyCode}
+              {user.companyCode ?? "Vista fondo"}
             </span>
             <span className="text-sm text-ink-soft">
               Año presupuestario <strong className="text-ink">{BUDGET_YEAR}</strong>
