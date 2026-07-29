@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
 import {
   MONTH_KEYS,
+  REAL_MONTH_KEYS,
   monthlyTotals,
   lineTotal,
   toClp,
@@ -35,6 +36,10 @@ export type ConsolidationRow = {
   ventasAnual: string;
   gastosAnual: string;
   flujoAnual: string;
+  // Ejecución real (los Excel del fondo traen PROYECTADO vs REAL)
+  ventasRealAnual: string;
+  gastosRealAnual: string;
+  flujoRealAnual: string;
   capexClp: string;
   capexCount: number;
   mix: { contrato: string; proyeccion: string; recurrente: string }; // % 0-100 (1 decimal)
@@ -67,6 +72,9 @@ export type FundConsolidation = {
     ventasAnual: string;
     gastosAnual: string;
     flujoAnual: string;
+    ventasRealAnual: string;
+    gastosRealAnual: string;
+    flujoRealAnual: string;
     capexClp: string;
   };
   mix: { contrato: string; proyeccion: string; recurrente: string };
@@ -154,8 +162,18 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
   const zero = () =>
     Object.fromEntries(MONTH_KEYS.map((k) => [k, new Decimal(0)])) as Record<MonthKey, Decimal>;
 
+  /** Suma anual de la serie ejecutada (r01-r12) de un conjunto de líneas. */
+  const realAnual = (lines: { [k: string]: unknown }[]) =>
+    lines.reduce(
+      (acc, line) =>
+        REAL_MONTH_KEYS.reduce((a, k) => a.plus(new Decimal(String(line[k] ?? 0))), acc),
+      new Decimal(0),
+    );
+
   const totalVentas = zero();
   const totalGastos = zero();
+  let totalVentasReal = new Decimal(0);
+  let totalGastosReal = new Decimal(0);
   let totalCapexClp = new Decimal(0);
   let mixContrato = new Decimal(0);
   let mixProyeccion = new Decimal(0);
@@ -178,6 +196,9 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
         ventasAnual: "0",
         gastosAnual: "0",
         flujoAnual: "0",
+        ventasRealAnual: "0",
+        gastosRealAnual: "0",
+        flujoRealAnual: "0",
         capexClp: "0",
         capexCount: 0,
         mix: { contrato: "0", proyeccion: "0", recurrente: "0" },
@@ -193,6 +214,8 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
 
     const ventasAnual = MONTH_KEYS.reduce((a, k) => a.plus(ventas[k]), new Decimal(0));
     const gastosAnual = MONTH_KEYS.reduce((a, k) => a.plus(gastos[k]), new Decimal(0));
+    const ventasRealAnual = realAnual(budget.salesLines);
+    const gastosRealAnual = realAnual(budget.expenseLines);
 
     // Mix por tipo de venta (totales anuales por línea)
     let contrato = new Decimal(0);
@@ -230,9 +253,12 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
 
     for (const k of MONTH_KEYS) {
       totalVentas[k] = totalVentas[k].plus(ventas[k]);
+      // (los totales reales se acumulan fuera del bucle mensual, ver abajo)
       totalGastos[k] = totalGastos[k].plus(gastos[k]);
     }
     totalCapexClp = totalCapexClp.plus(capexClp);
+    totalVentasReal = totalVentasReal.plus(ventasRealAnual);
+    totalGastosReal = totalGastosReal.plus(gastosRealAnual);
     mixContrato = mixContrato.plus(contrato);
     mixProyeccion = mixProyeccion.plus(proyeccion);
     mixRecurrente = mixRecurrente.plus(recurrente);
@@ -245,6 +271,9 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
       ventas: toStrMap(ventas),
       gastos: toStrMap(gastos),
       flujo: toStrMap(flujo),
+      ventasRealAnual: ventasRealAnual.toString(),
+      gastosRealAnual: gastosRealAnual.toString(),
+      flujoRealAnual: ventasRealAnual.minus(gastosRealAnual).toString(),
       ventasAnual: ventasAnual.toString(),
       gastosAnual: gastosAnual.toString(),
       flujoAnual: ventasAnual.minus(gastosAnual).toString(),
@@ -274,6 +303,9 @@ function aggregateFund(companies: FundCompanies, fx: Fx, year: number): FundCons
       ventas: toStrMap(totalVentas),
       gastos: toStrMap(totalGastos),
       flujo: toStrMap(totalFlujo),
+      ventasRealAnual: totalVentasReal.toString(),
+      gastosRealAnual: totalGastosReal.toString(),
+      flujoRealAnual: totalVentasReal.minus(totalGastosReal).toString(),
       ventasAnual: ventasAnualTotal.toString(),
       gastosAnual: gastosAnualTotal.toString(),
       flujoAnual: ventasAnualTotal.minus(gastosAnualTotal).toString(),

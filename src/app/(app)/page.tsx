@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
+import { BUDGET_YEAR } from "@/lib/budget";
 import { StatusBadge } from "@/components/status-badge";
 import { ManagerApprovalPanel } from "@/components/approval/manager-panel";
 import { AdminBudgetActions } from "@/components/approval/admin-actions";
-import { lineTotal, monthlyTotals, monthlyFlow, toClp, formatMoney, MONTH_KEYS, type CurrencyCode } from "@/lib/money";
+import { lineTotal, monthlyTotals, monthlyFlow, toClp, formatMoney, dec, MONTH_KEYS, REAL_MONTH_KEYS, type CurrencyCode } from "@/lib/money";
 
-const YEAR = 2027;
+// Año que muestra el dashboard: el mismo por defecto de la plataforma.
+const YEAR = BUDGET_YEAR;
 const FX_FALLBACK = { ufToClp: "39200", usdToClp: "950" };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -166,6 +168,18 @@ async function ManagerDashboard({ companyId }: { companyId: string }) {
     lineTotal({}),
   );
 
+  // Ejecución real: los Excel del fondo registran el gasto/abono efectivo en
+  // r01-r12. Sin esto el resumen mostraría $0 en los años cargados solo con real.
+  const realAnual = (lines: { [k: string]: unknown }[]) =>
+    lines.reduce(
+      (acc, line) => REAL_MONTH_KEYS.reduce((a, k) => a.plus(dec(String(line[k] ?? 0))), acc),
+      dec(0),
+    );
+  const ventasReal = realAnual(budget.salesLines);
+  const gastosReal = realAnual(budget.expenseLines);
+  const flujoReal = ventasReal.minus(gastosReal);
+  const hayEjecucion = !ventasReal.isZero() || !gastosReal.isZero();
+
   const negMonths = MONTH_KEYS.filter((k) => flujo[k].isNegative()).length;
   const lastObservation = events.find((e) => e.action === "OBSERVADO");
 
@@ -190,6 +204,22 @@ async function ManagerDashboard({ companyId }: { companyId: string }) {
         />
         <Card label="CAPEX del año" value={formatMoney(capexClp, "CLP")} sub={`${budget.capexItems.length} ítem(s)`} />
       </div>
+
+      {hayEjecucion && (
+        <div>
+          <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-brand">Ejecución real {YEAR}</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Card label="Ventas ejecutadas" value={formatMoney(ventasReal, "CLP")} sub="abonos e ingresos efectivos" />
+            <Card label="Gastos ejecutados" value={formatMoney(gastosReal, "CLP")} sub="egresos efectivos" />
+            <Card
+              label="Flujo ejecutado"
+              value={formatMoney(flujoReal, "CLP")}
+              sub={flujoReal.isNegative() ? "el año cerró con déficit" : "el año cerró con superávit"}
+              tone={flujoReal.isNegative() ? "danger" : "ok"}
+            />
+          </div>
+        </div>
+      )}
 
       <ManagerApprovalPanel
         budgetId={budget.id}

@@ -47,9 +47,12 @@ export default async function BancosPage({
     pending: pendingBySheet.get(s.id) ?? 0,
   }));
 
+  // Por defecto se abre la planilla con más pagos pendientes: es lo que
+  // tesorería necesita ver primero (antes se abría la última cargada).
+  const defaultSheet = [...sheetViews].sort((a, b) => b.pending - a.pending || b.total - a.total)[0];
   const selectedSheetId = planilla && sheetViews.some((s) => s.id === planilla)
     ? planilla
-    : sheetViews[0]?.id ?? null;
+    : defaultSheet?.id ?? null;
 
   let movements: MovementView[] = [];
   if (selectedSheetId) {

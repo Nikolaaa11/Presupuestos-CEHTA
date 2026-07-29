@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { auth } from "@/auth";
 import { getFundExportData } from "@/lib/consolidation";
+import { BUDGET_YEAR } from "@/lib/budget";
 import { MONTH_KEYS, MONTH_LABELS, lineTotal, toClp, type CurrencyCode } from "@/lib/money";
 
 /**
@@ -8,7 +9,7 @@ import { MONTH_KEYS, MONTH_LABELS, lineTotal, toClp, type CurrencyCode } from "@
  * Hojas: Resumen · Mensual · CAPEX · una hoja por empresa con el detalle de líneas.
  */
 
-const YEAR_DEFAULT = 2027;
+const YEAR_DEFAULT = BUDGET_YEAR;
 const MONTH_HDR = MONTH_KEYS.map((k) => MONTH_LABELS[k]);
 
 const n = (s: string) => Number(s); // solo para celdas de Excel (display), nunca para calcular

@@ -26,9 +26,15 @@ const SOURCE_LABELS: Record<string, string> = {
   OTRO: "Otro",
 };
 
-export default async function ConsolidadoPage() {
+export default async function ConsolidadoPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ "año"?: string }>;
+}) {
   await requireFundAdmin();
-  const consolidation = await getFundConsolidation(BUDGET_YEAR);
+  const params = await searchParams;
+  const year = Number(params["año"]) || BUDGET_YEAR;
+  const consolidation = await getFundConsolidation(year);
   const flowIsNegative = dec(consolidation.totals.flujoAnual).isNegative();
 
   return (
@@ -73,6 +79,19 @@ export default async function ConsolidadoPage() {
           <KpiCard
             label="CAPEX total CLP"
             value={formatMoney(consolidation.totals.capexClp, "CLP")}
+          />
+          <KpiCard
+            label="Ventas ejecutadas"
+            value={formatMoney(consolidation.totals.ventasRealAnual, "CLP")}
+          />
+          <KpiCard
+            label="Gastos ejecutados"
+            value={formatMoney(consolidation.totals.gastosRealAnual, "CLP")}
+          />
+          <KpiCard
+            label="Flujo ejecutado"
+            value={formatMoney(consolidation.totals.flujoRealAnual, "CLP")}
+            tone={dec(consolidation.totals.flujoRealAnual).isNegative() ? "danger" : "ok"}
           />
         </div>
         <div className="mt-4 flex flex-wrap gap-2" aria-label="Mix de venta consolidado">
@@ -213,6 +232,8 @@ function CompanyTable({ consolidation }: { consolidation: FundConsolidation }) {
               <th className="cell-num px-4 py-3">Ventas anual</th>
               <th className="cell-num px-4 py-3">Gastos anual</th>
               <th className="cell-num px-4 py-3">Flujo anual</th>
+              <th className="cell-num px-4 py-3">Ventas ejec.</th>
+              <th className="cell-num px-4 py-3">Gastos ejec.</th>
               <th className="cell-num px-4 py-3">CAPEX CLP</th>
               <th className="px-4 py-3">Mix</th>
             </tr>
@@ -240,6 +261,8 @@ function CompanyTable({ consolidation }: { consolidation: FundConsolidation }) {
                   <td className={`cell-num px-4 py-3 font-medium ${negative ? "text-danger" : ""}`}>
                     {formatCell(row.flujoAnual)}
                   </td>
+                  <td className="cell-num px-4 py-3">{formatCell(row.ventasRealAnual)}</td>
+                  <td className="cell-num px-4 py-3">{formatCell(row.gastosRealAnual)}</td>
                   <td className="cell-num px-4 py-3">{formatCell(row.capexClp)}</td>
                   <td className="px-4 py-3"><MixBar mix={row.mix} /></td>
                 </tr>
@@ -252,6 +275,8 @@ function CompanyTable({ consolidation }: { consolidation: FundConsolidation }) {
               <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.ventasAnual)}</td>
               <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.gastosAnual)}</td>
               <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.flujoAnual)}</td>
+              <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.ventasRealAnual)}</td>
+              <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.gastosRealAnual)}</td>
               <td className="cell-num px-4 py-3">{formatCell(consolidation.totals.capexClp)}</td>
               <td className="px-4 py-3"><MixBar mix={consolidation.mix} dark /></td>
             </tr>
