@@ -48,6 +48,18 @@ export type LoteView = {
 
 export type BitacoraEntry = { id: string; quien: string; accion: string; detalle: string | null; cuando: string };
 
+/** Avance de una orden de compra: los montos llegan YA formateados del server. */
+export type AvanceOCView = {
+  referencia: string;
+  total: string;
+  avanzado: string;
+  pendiente: string;
+  porcentaje: number;
+  proximoPago: string | null;
+  movimientos: number;
+  completa: boolean;
+};
+
 type Permisos = { libera: boolean; comprobante: boolean; edita: boolean };
 type Filtro = "todos" | "pendientes" | "liberados" | "en_transferencia" | "transferidos";
 
@@ -73,6 +85,9 @@ const montoDe = (m: MovementView) =>
 /** Qué le falta al movimiento para que el banco acepte la transferencia. */
 const faltaDatos = (m: MovementView) =>
   [!m.rut && "RUT", !m.bankName && "banco", !m.accountNumber && "cuenta"].filter(Boolean).join(", ");
+
+/** Un abono (ingreso) no se "paga": el badge de pagable solo aplica a egresos. */
+const esAbonoDe = (m: MovementView) => !new Decimal(m.credit).abs().isZero();
 
 // ─────────────────────────── Fila ───────────────────────────
 
@@ -117,10 +132,17 @@ const MovementRow = memo(function MovementRow({
       <td className="max-w-44 px-3 py-2.5 text-xs text-ink-soft">
         {m.bankName && <p className="truncate">{m.bankName}</p>}
         {m.accountNumber && <p className="cell-num truncate text-left">{m.accountNumber}</p>}
-        {faltaDatos(m) && (
+        {faltaDatos(m) ? (
           <p className="text-warn" title="El banco rechaza la transferencia sin estos datos">
             ⚠ falta {faltaDatos(m)}
           </p>
+        ) : (
+          !esAbonoDe(m) &&
+          m.estado === "PENDIENTE" && (
+            <p className="font-medium text-ok" title="RUT, banco y cuenta completos — el banco acepta la transferencia">
+              ✓ se puede pagar
+            </p>
+          )
         )}
       </td>
       <td className="whitespace-nowrap px-3 py-2.5">
@@ -147,13 +169,14 @@ const MovementRow = memo(function MovementRow({
 // ─────────────────────────── Componente principal ───────────────────────────
 
 export function BancosClient({
-  companyCode, sheets, selectedSheetId, movements: initial, lotes, bitacora, permisos, quienSoy,
+  companyCode, sheets, selectedSheetId, movements: initial, lotes, avancesOC, bitacora, permisos, quienSoy,
 }: {
   companyCode: string;
   sheets: SheetView[];
   selectedSheetId: string | null;
   movements: MovementView[];
   lotes: LoteView[];
+  avancesOC: AvanceOCView[];
   bitacora: BitacoraEntry[];
   permisos: Permisos;
   quienSoy: string;
@@ -313,6 +336,59 @@ export function BancosClient({
               ))}
             </ul>
           )}
+        </section>
+      )}
+
+      {/* Avance por orden de compra — el "pago por etapas" de tesorería:
+          cada OC se paga en varios movimientos; acá se ve qué % ya avanzó */}
+      {avancesOC.length > 0 && (
+        <section className="rounded-xl border border-line bg-white">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-5 py-3">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-brand">
+              Avance por orden de compra
+            </h2>
+            <span className="text-xs text-ink-soft">
+              {avancesOC.filter((a) => !a.completa).length} con saldo pendiente ·{" "}
+              {avancesOC.filter((a) => a.completa).length} completas
+            </span>
+          </div>
+          <ul className="max-h-[28rem] divide-y divide-line/70 overflow-y-auto">
+            {avancesOC.map((a) => (
+              <li key={a.referencia} className="px-5 py-3">
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                  <span className="min-w-20 text-sm font-semibold text-ink">{a.referencia}</span>
+                  <span className={`text-sm font-bold ${a.completa ? "text-ok" : "text-brand"}`}>
+                    {a.porcentaje}%
+                  </span>
+                  <span className="cell-num text-xs text-ink-soft">
+                    {a.avanzado} de {a.total}
+                  </span>
+                  {!a.completa && (
+                    <span className="cell-num text-xs font-medium text-warn">
+                      pendiente {a.pendiente}
+                    </span>
+                  )}
+                  {a.proximoPago && !a.completa && (
+                    <span className="text-xs text-ink-soft">próximo pago {a.proximoPago}</span>
+                  )}
+                  <span className="ml-auto text-xs text-ink-soft">{a.movimientos} mov.</span>
+                </div>
+                <div
+                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-soft"
+                  role="progressbar"
+                  aria-valuenow={a.porcentaje}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Avance de ${a.referencia}`}
+                >
+                  <div
+                    className={`h-full rounded-full ${a.completa ? "bg-ok" : "bg-brand"}`}
+                    style={{ width: `${Math.min(a.porcentaje, 100)}%` }}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

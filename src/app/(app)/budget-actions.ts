@@ -278,3 +278,42 @@ export async function reopenBudget(budgetId: string, comment: string): Promise<R
     return failure(error);
   }
 }
+
+// ─────────────────── Marcar líneas de gasto como pagadas ───────────────────
+
+/**
+ * Marca (o desmarca) una línea de gasto como pagada. Es información OPERATIVA:
+ * se permite también con el presupuesto aprobado — los pagos ocurren después
+ * de aprobar. Por eso no pasa por requireEditableBudget: el guard es rol con
+ * facultad de operar pagos + alcance de empresa. Queda quién y cuándo.
+ */
+export async function marcarGastoPagado(lineId: string, paid: boolean): Promise<Result> {
+  try {
+    const user = await requireUser();
+    const { puede, alcanzaEmpresa, ROLES_EDICION } = await import("@/lib/tesoreria");
+
+    const line = await prisma.expenseLine.findUnique({
+      where: { id: lineId },
+      select: { budget: { select: { companyId: true } } },
+    });
+    if (!line) throw new Error("No se puede marcar: la línea de gasto no existe");
+
+    if (!puede(user, ROLES_EDICION)) throw new Error("Tu rol no permite marcar pagos");
+    if (!alcanzaEmpresa(user, line.budget.companyId)) {
+      throw new Error("No se puede marcar: no tenés acceso a esta empresa");
+    }
+
+    await prisma.expenseLine.update({
+      where: { id: lineId },
+      data: paid
+        ? { paid: true, paidAt: new Date(), paidById: user.id }
+        : { paid: false, paidAt: null, paidById: null },
+    });
+
+    revalidatePath("/gastos");
+    revalidatePath("/");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}

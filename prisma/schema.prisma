@@ -63,6 +63,8 @@ model User {
   batchesProofed     TransferBatch[] @relation("BatchProofBy")
   batchesTransferred TransferBatch[] @relation("BatchTransferredBy")
   bankEvents         BankEvent[]
+  expenseLinesPaid   ExpenseLine[]       @relation("ExpenseLinePaidBy")
+  capexStagesPaid    CapexPaymentStage[] @relation("CapexStagePaidBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -220,6 +222,15 @@ model ExpenseLine {
   r11 Decimal @default(0) @db.Decimal(18, 2)
   r12 Decimal @default(0) @db.Decimal(18, 2)
 
+  // Marcado manual de "ya se pagó" — informativo, no depende de un cruce
+  // automático con Bancos (no hay una clave de unión confiable entre ambos:
+  // ni RUT ni número de orden compartido). El módulo puede SUGERIR un cruce
+  // por monto, pero solo una persona confirma el marcado.
+  paid     Boolean   @default(false)
+  paidAt   DateTime?
+  paidById String?
+  paidBy   User?     @relation("ExpenseLinePaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -268,15 +279,44 @@ model CapexItem {
   approvalLevel  Int? // 1..6
   approvalStatus ApprovalStatus @default(BORRADOR)
 
-  salesLines   SalesLine[] // ventas vinculadas a la iniciativa
-  expenseLines ExpenseLine[] // gastos vinculados a la iniciativa
-  approvals    ApprovalEvent[]
+  salesLines     SalesLine[] // ventas vinculadas a la iniciativa
+  expenseLines   ExpenseLine[] // gastos vinculados a la iniciativa
+  approvals      ApprovalEvent[]
+  paymentStages  CapexPaymentStage[] // cronograma de desembolso por etapas (%)
 
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([budgetId])
+}
+
+/**
+ * Cronograma de pago de una inversión, en porcentaje del monto total en vez
+ * de cuotas mensuales iguales — ej. 30% al pedido, 70% contra entrega. Es
+ * información aparte de `financingMonths`/"cuota mensual estimada" del caso
+ * bancable: esa cifra sigue siendo la referencial para pitchear al banco:
+ * esto es la planificación interna de cuándo desembolsar cada parte.
+ */
+model CapexPaymentStage {
+  id          String    @id @default(cuid())
+  capexItemId String
+  capexItem   CapexItem @relation(fields: [capexItemId], references: [id], onDelete: Cascade)
+
+  label    String // "Anticipo", "Contra entrega", "Final"...
+  percent  Decimal @db.Decimal(5, 2) // 0-100, del monto total del ítem
+  dueMonth Int // 1..12, mes del año del presupuesto en que vence esta etapa
+
+  paid     Boolean   @default(false)
+  paidAt   DateTime?
+  paidById String?
+  paidBy   User?     @relation("CapexStagePaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([capexItemId])
 }
 
 // ─────────────────────────────── Auditoría y parámetros ───────────────────────────────

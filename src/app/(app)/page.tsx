@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
 import { BUDGET_YEAR } from "@/lib/budget";
 import { puedeRevisar, puedeAprobar } from "@/lib/budget-policy";
+import { PanelAvisos } from "@/components/avisos/panel-avisos";
 import { StatusBadge } from "@/components/status-badge";
 import { ManagerApprovalPanel } from "@/components/approval/manager-panel";
 import { AdminBudgetActions } from "@/components/approval/admin-actions";
@@ -96,6 +97,10 @@ async function AdminDashboard({
             </span>
           )}
         </div>
+      </div>
+
+      <div className="mt-6">
+        <PanelAvisos mostrarEmpresa />
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -228,6 +233,8 @@ async function ManagerDashboard({ companyId }: { companyId: string }) {
         </div>
         <StatusBadge status={budget.status} />
       </div>
+
+      <PanelAvisos companyId={companyId} mostrarEmpresa={false} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card label="Ventas anuales" value={formatMoney(ventasAnual, "CLP")} sub={`${budget.salesLines.length} líneas`} />

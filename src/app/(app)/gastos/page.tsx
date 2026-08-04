@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { getBudgetYears, getCurrentBudget, isEditableStatus, resolveViewCompany, resolveYear } from "@/lib/budget";
 import { MONTH_KEYS, REAL_MONTH_KEYS, type MonthKey, type RealMonthKey } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { sugerenciasPagoGastos } from "@/lib/avisos";
 import { ExpenseGrid } from "./expense-grid";
 import { startBudget } from "./actions";
 
@@ -53,6 +54,7 @@ export default async function GastosPage({
   }
 
   const categoryOrder = new Map(categories.map((category, index) => [category.id, index]));
+  const sugerencias = await sugerenciasPagoGastos(budget.id);
   const lines = budget.expenseLines
     .map((line) => {
       const months = Object.fromEntries(
@@ -69,6 +71,8 @@ export default async function GastosPage({
         categoryId: line.categoryId,
         item: line.item,
         capexItemId: line.capexItemId,
+        paid: line.paid,
+        paidAt: line.paidAt?.toISOString() ?? null,
         sortOrder: line.sortOrder,
         ...months,
         ...real,
@@ -90,7 +94,7 @@ export default async function GastosPage({
           <StatusBadge status={budget.status} />
         </div>
       </ModuleHeader>
-      {!editable && <ReadOnlyBanner status={budget.status} />}
+      {editable ? <EditableBanner /> : <ReadOnlyBanner status={budget.status} />}
       <ExpenseGrid
         budgetId={budget.id}
         lines={lines}
@@ -98,6 +102,7 @@ export default async function GastosPage({
         initiatives={initiatives}
         editable={editable}
         currency={budget.currency}
+        sugerencias={sugerencias}
       />
     </div>
   );
@@ -109,4 +114,8 @@ function ModuleHeader({ title, companyName, children }: { title: string; company
 
 function ReadOnlyBanner({ status }: { status: string }) {
   return <div className="rounded-lg border border-lavender bg-lavender-bg px-4 py-3 text-sm font-medium text-brand-dark">Presupuesto {status.toLocaleLowerCase("es-CL")} — solo lectura</div>;
+}
+
+function EditableBanner() {
+  return <div className="rounded-lg border border-ok/30 bg-ok-bg px-4 py-3 text-sm font-medium text-ok">Presupuesto editable — podés modificar las cifras y enviarlo al fondo desde el Dashboard.</div>;
 }

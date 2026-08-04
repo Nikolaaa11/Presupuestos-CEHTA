@@ -1,8 +1,10 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
 import { prisma } from "@/lib/prisma";
 import { resolveViewCompany } from "@/lib/budget";
+import { avancesOC } from "@/lib/avisos";
+import { dec, formatMoney } from "@/lib/money";
 import { ETIQUETA_ACCION, puede, ROLES_DUENO, ROLES_COMPROBANTE, ROLES_EDICION } from "@/lib/tesoreria";
-import { BancosClient, type BitacoraEntry, type LoteView, type MovementView, type SheetView } from "./bancos-client";
+import { BancosClient, type AvanceOCView, type BitacoraEntry, type LoteView, type MovementView, type SheetView } from "./bancos-client";
 
 const fechaHora = (d: Date) =>
   new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
@@ -17,7 +19,7 @@ export default async function BancosPage({
   const { empresa, planilla } = await searchParams;
   const { user, company } = await resolveViewCompany(empresa);
 
-  const [sheets, companies, lotes, bitacora, pendingGroups] = await Promise.all([
+  const [sheets, companies, lotes, bitacora, pendingGroups, avances] = await Promise.all([
     prisma.bankSheet.findMany({
       where: { companyId: company.id },
       orderBy: { createdAt: "desc" },
@@ -48,7 +50,21 @@ export default async function BancosPage({
       where: { estado: "PENDIENTE", sheet: { companyId: company.id } },
       _count: { _all: true },
     }),
+    avancesOC(company.id),
   ]);
+
+  // Avance por orden de compra: el "pago por etapas" de Bancos. Las OCs vienen
+  // como varios movimientos con la misma referencia; acá viajan ya formateados.
+  const avanceViews: AvanceOCView[] = avances.map((a) => ({
+    referencia: a.referencia,
+    total: formatMoney(a.total, "CLP"),
+    avanzado: formatMoney(a.avanzado, "CLP"),
+    pendiente: formatMoney(a.pendiente, "CLP"),
+    porcentaje: a.porcentaje,
+    proximoPago: a.fechaProximoPago ? fechaCorta(new Date(a.fechaProximoPago)) : null,
+    movimientos: a.cantidadMovimientos,
+    completa: dec(a.pendiente).lte(0),
+  }));
 
   const pendingBySheet = new Map(pendingGroups.map((g) => [g.sheetId, g._count._all]));
 
@@ -99,9 +115,13 @@ export default async function BancosPage({
     numero: `LOTE-${String(l.number).padStart(3, "0")}`,
     status: l.status,
     pagos: l.movements.length,
+    // Suma con Decimal — nunca aritmética float sobre montos.
     total: l.movements
-      .reduce((a, m) => a + (Math.abs(Number(m.debit.toString())) || Math.abs(Number(m.credit.toString()))), 0)
-      .toString(),
+      .reduce((acc, m) => {
+        const debit = dec(m.debit).abs();
+        return acc.plus(debit.isZero() ? dec(m.credit).abs() : debit);
+      }, dec(0))
+      .toFixed(2),
     liberadoPor: l.releasedBy?.name ?? "—",
     liberadoEl: fechaHora(l.releasedAt),
     comprobante: l.proofFileName,
@@ -140,6 +160,7 @@ export default async function BancosPage({
         selectedSheetId={selectedSheetId}
         movements={movements}
         lotes={loteViews}
+        avancesOC={avanceViews}
         bitacora={bitacoraViews}
         permisos={{
           libera: puede(user, ROLES_DUENO),

@@ -85,7 +85,7 @@ export default async function VentasPage({
           <StatusBadge status={budget.status} />
         </div>
       </ModuleHeader>
-      {!editable && <ReadOnlyBanner status={budget.status} />}
+      {editable ? <EditableBanner /> : <ReadOnlyBanner status={budget.status} />}
       <SalesGrid
         budgetId={budget.id}
         lines={lines}
@@ -103,4 +103,8 @@ function ModuleHeader({ title, companyName, children }: { title: string; company
 
 function ReadOnlyBanner({ status }: { status: string }) {
   return <div className="rounded-lg border border-lavender bg-lavender-bg px-4 py-3 text-sm font-medium text-brand-dark">Presupuesto {status.toLocaleLowerCase("es-CL")} — solo lectura</div>;
+}
+
+function EditableBanner() {
+  return <div className="rounded-lg border border-ok/30 bg-ok-bg px-4 py-3 text-sm font-medium text-ok">Presupuesto editable — podés modificar las cifras y enviarlo al fondo desde el Dashboard.</div>;
 }

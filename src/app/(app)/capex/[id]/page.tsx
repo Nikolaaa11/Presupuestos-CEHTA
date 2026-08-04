@@ -4,8 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/authz";
 import { bankableCase, coverageLabel } from "@/lib/bankable";
 import { approvalInfo } from "@/lib/capex";
-import { formatMoney, formatCell, MONTH_LABELS, MONTH_KEYS, type CurrencyCode, type Fx } from "@/lib/money";
+import { canEditBudget } from "@/lib/budget-policy";
+import { puede, alcanzaEmpresa, ROLES_EDICION } from "@/lib/tesoreria";
+import { sumaPorcentajes } from "@/lib/avisos-core";
+import { dec, formatMoney, formatCell, MONTH_LABELS, MONTH_KEYS, type CurrencyCode, type Fx } from "@/lib/money";
 import { PrintButton } from "@/components/print-button";
+import { CronogramaPago, type EtapaView } from "@/components/capex/cronograma-pago";
 
 const FX_FALLBACK: Fx = { ufToClp: "39200", usdToClp: "950" };
 
@@ -35,6 +39,10 @@ export default async function BankableCasePage({
         budget: { include: { company: { select: { name: true } } } },
         salesLines: { orderBy: { sortOrder: "asc" } },
         expenseLines: { orderBy: { sortOrder: "asc" } },
+        paymentStages: {
+          orderBy: { sortOrder: "asc" },
+          include: { paidBy: { select: { name: true } } },
+        },
       },
     }),
     prisma.fxRate.findMany(),
@@ -63,6 +71,29 @@ export default async function BankableCasePage({
   const name = item.initiativeName ?? item.description;
   const level = item.approvalLevel ? approvalInfo(item.approvalLevel) : null;
   const activeMonthRows = c.months.filter((m) => !m.sales.isZero() || !m.expenses.isZero() || !m.cumulative.isZero());
+
+  // Cronograma por etapas: los montos de cada etapa se calculan ACÁ (server),
+  // el componente cliente solo los muestra ya formateados.
+  const etapas: EtapaView[] = item.paymentStages.map((s) => ({
+    id: s.id,
+    label: s.label,
+    percent: dec(s.percent).toFixed(2).replace(/\.00$/, ""),
+    dueMonth: s.dueMonth,
+    monto: formatMoney(dec(item.amount).times(dec(s.percent)).div(100), item.currency as CurrencyCode),
+    paid: s.paid,
+    paidAt: s.paidAt ? s.paidAt.toLocaleDateString("es-CL") : null,
+    paidBy: s.paidBy?.name ?? null,
+  }));
+  const restante = dec(100)
+    .minus(sumaPorcentajes(item.paymentStages.map((s) => s.percent)))
+    .toFixed(2)
+    .replace(/\.00$/, "");
+  const cronogramaEditable = canEditBudget(user, {
+    companyId: item.budget.companyId,
+    status: item.budget.status,
+  });
+  const puedeMarcarPago =
+    puede(user, ROLES_EDICION) && alcanzaEmpresa(user, item.budget.companyId);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 print:max-w-none print:space-y-4">
@@ -135,6 +166,16 @@ export default async function BankableCasePage({
           <p className="mt-1 text-xs text-ink-soft">{coverageLabel(c)}</p>
         </div>
       </section>
+
+      {/* Cronograma de desembolso por etapas (%) — planificación interna;
+          la cuota referencial de arriba sigue siendo la del pitch al banco */}
+      <CronogramaPago
+        capexItemId={item.id}
+        etapas={etapas}
+        restante={restante}
+        editable={cronogramaEditable}
+        puedeMarcar={puedeMarcarPago}
+      />
 
       {/* Flujo mensual de la iniciativa */}
       <section className="overflow-hidden rounded-xl border border-line bg-white">
