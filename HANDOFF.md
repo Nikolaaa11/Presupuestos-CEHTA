@@ -1,0 +1,156 @@
+# HANDOFF — Presupuestos CEHTA
+
+> Actualizado: 2026-08-10. Para quien continúe el trabajo: una persona nueva,
+> Guido/Vicky operando, o una sesión nueva de Claude/Codex. Complementa
+> `README.md` (qué hace la app) y `AGENTS.md` (reglas para agentes) — acá está
+> lo que no se deduce del código: estado, decisiones, operación y pendientes.
+
+## 1. Estado en una línea
+
+**En producción, con datos reales, verificada de punta a punta.**
+https://presupuestos-cehta-nicolasrietta-1798s-projects.vercel.app
+(deploy automático al pushear a `main` de `Nikolaaa11/Presupuestos-CEHTA`).
+
+Datos reales cargados: 982+ movimientos bancarios (RHO, AFIS, CENERGY,
+Panimávida), 93 órdenes de compra con avance de pago, presupuestos RHO
+2025/2026 (ventas+gastos+114 ítems CAPEX con proyectado vs real), gastos AFIS
+2026. Base Prisma Postgres **reclamada** (ya no vence).
+
+## 2. Los dos circuitos (el corazón del diseño)
+
+Todo lo importante de la plataforma es separación de funciones:
+
+```
+Presupuesto: BORRADOR ─envía→ ENVIADO ─revisa→ REVISADO ─aprueba→ APROBADO
+              (encargado)     (Vicky)           (Guido)
+Pagos:       PENDIENTE ─libera→ LIBERADO ─comprobante→ EN_TRANSFERENCIA ─confirma→ TRANSFERIDO
+                        (Guido)           (Vicky)                        (Guido)
+```
+
+- Guido NO revisa presupuestos (si revisara firmaría los dos pasos); **quien
+  revisó no puede aprobar** — guard de cuatro ojos en `reviewBudget`, chequea
+  el último `ApprovalEvent REVISADO` incluso para `FUND_ADMIN`.
+- OBSERVAR (con comentario obligatorio) devuelve a edición en cualquier etapa.
+- Liberar N pagos crea un `TransferBatch` correlativo del que sale la
+  **nómina bancaria Excel** (`/api/bancos/nomina?lote=`).
+- Bitácoras append-only: `ApprovalEvent` (presupuesto) y `BankEvent` (pagos).
+
+## 3. Usuarios (13, todos verificados en producción)
+
+| Cuenta | Rol | Clave |
+|---|---|---|
+| `guido@cehta.cl` | DUENO — aprueba, libera, confirma | `Cehta2026!` |
+| `vicky@cehta.cl` | ADMINISTRADORA — revisa, sube comprobantes | `Cehta2026!` |
+| `admin@cehta.cl` | FUND_ADMIN — consolida, configura, destraba | `Cehta2026!` |
+| `demo.<código>@cehta.cl` ×10 | COMPANY_MANAGER de cada entidad | `Demo2026!` |
+
+⚠️ Claves de puesta en marcha: **cambiarlas antes de repartir accesos reales**
+(hoy se cambian por SQL o seed; no hay UI de cambio de clave — ver pendientes).
+
+## 4. Decisiones que no son obvias desde el código
+
+1. **Dinero**: montos como string + `decimal.js` (`src/lib/money.ts`). Jamás
+   float. Agregados server-side. La única excepción histórica (total de lotes)
+   se corrigió.
+2. **Semántica de las OCs (costó un hallazgo crítico)**: cada orden de compra
+   vive en DOS fuentes con la misma referencia — la planilla de registro
+   ("Órdenes de compra RHO/Panimávida": fila pagada = TOTAL de la orden; fila
+   PENDIENTE = SALDO por pagar, ej. OC0017 = contrato en cuotas) y las
+   cartolas (pagos efectivos). Sumarlas cuenta doble. La lógica correcta está
+   en `agruparAvancesOC` (`src/lib/avisos-core.ts`) con tests de los casos
+   reales OC0005/OC0017/OC0092.
+3. **Los pendientes del registro de OCs no traen fecha** → los avisos de
+   vencimiento no pueden dispararse solos; el panel resume "N OCs sin fecha
+   por $X" y al ponerles fecha (Editar en Bancos) el aviso se activa.
+4. **Importación Excel: la plantilla manda.** Nombres de columna tolerantes,
+   presencia estricta (archivos parciales pisaban datos: Ene–Jun zeroaba
+   jul–dic, capex sin Moneda convertía UF→CLP y rompía el nivel N1–N6).
+   Celdas opcionales vacías NO pisan en updates. Filas "EJEMPLO" se rechazan.
+   Upsert nunca borra; `r01-r12`, `paid` y vínculos quedan intactos.
+5. **Zip bomb**: toda subida pasa por `revisarZip` (`src/lib/zip-safety.ts`)
+   ANTES de SheetJS — un .xlsx de 9,5 MB puede declarar 2.800 MB
+   descomprimidos y `sheetRows` no protege el XML.
+6. **Marcar pagado es operativo, editar es planificar**: tildar gastos
+   pagados / etapas pagadas se permite con presupuesto APROBADO (los pagos
+   ocurren después de aprobar); editar cifras/etapas exige BORRADOR/OBSERVADO.
+7. **Acciones de celda no revalidan** (UI optimista): `revalidatePath` en cada
+   tecla causaba recarga completa. Solo los actions estructurales revalidan.
+   Las filas de `amount-grid.tsx` están memoizadas: todo callback que baje a
+   la fila DEBE ser estable.
+8. **Sin middleware.ts**: Next 16 acá protege en layouts y server actions.
+   `params`/`searchParams` son Promises.
+
+## 5. Operación
+
+```bash
+npm run dev        # requiere npm run db:dev en otra terminal (puerto 51214)
+npm run db:apply   # migraciones en dev (migrate dev NO funciona contra el wasm local)
+npm test           # 106 tests — DEBE quedar verde
+npm run build      # corre scripts/db-deploy.mjs y despues next build
+```
+
+- **Migraciones en producción: solas.** El build de Vercel ejecuta
+  `scripts/db-deploy.mjs` (advisory lock; reconoce `_prisma_migrations` de
+  prod Y `_local_applied_migrations` de dev — sin eso reintentaría la
+  migración inicial sobre datos reales). Escribir el SQL idempotente
+  (`IF NOT EXISTS`, `DO $$ ... EXCEPTION`).
+- **DATABASE_URL de producción** está como variable sensible en Vercel (no se
+  puede leer; `vercel env rm/add` para cambiarla — la API dio 403).
+- **Tras `prisma generate`**: reiniciar el dev server (caché de Turbopack).
+- La base local (`prisma dev`) se cae entre sesiones: relanzar y esperar el
+  puerto 51214.
+
+## 6. Verificación (el hábito del proyecto)
+
+Nada se declara terminado sin verificarlo contra el server real:
+
+| Script (`scripts/`) | Qué verifica |
+|---|---|
+| `verify-ciclo-prod.mjs` | Aprobación a dos manos en producción (9 checks) |
+| `verify-guia-prod.mjs` | Guía por rol: cada uno ve lo suyo (16 checks) |
+| `verify-avisos-prod.mjs` | Avisos, avance OC sin doble conteo, etapas (14) |
+| `verify-import-prod.mjs` | Plantillas, botón, EJEMPLO, guard de rol (6) — no muta datos |
+| `test-import-presupuesto.mjs` | E2E local de importación (19 checks, limpia tras sí) |
+| `qa-datos.mjs` | Invariantes de datos contra la base (11 checks) |
+| `listar-usuarios.mjs` | Las 13 cuentas entran de verdad |
+
+Además: revisión adversarial multi-agente antes de cada deploy grande
+(encontró y corrigió 1 DoS real, doble conteo de OCs, pérdidas silenciosas de
+datos en imports, zip bomb — el patrón se repite: los tests propios pasan y
+la revisión igual encuentra cosas).
+
+## 7. Cómo se trabaja (Fable + Codex)
+
+- **Fable/Claude**: schema, migraciones, `src/lib/**`, `src/app/api/**`,
+  circuitos (bancos/capex/budget-actions), scripts, seguridad, commits.
+- **Codex CLI** (`codex exec --full-auto --skip-git-repo-check "..."`):
+  UI acotada sobre specs escritos (`specs/SPEC-F*.md`). No commitea; su diff
+  se revisa SIEMPRE antes de integrar. Fronteras en `AGENTS.md`.
+
+## 8. Pendientes conocidos (en orden de valor)
+
+1. **Cambio de clave + usuarios reales**: hoy son cuentas demo con claves
+   compartidas por rol. Falta UI de gestión de usuarios (alta, clave, roles).
+2. **Fechas de pago de las OCs**: los avisos de vencimiento están listos pero
+   duermen hasta que las OCs pendientes tengan fecha (se cargan con Editar en
+   Bancos, o agregando fecha a la planilla de registro y re-subiéndola).
+3. **Datos bancarios incompletos**: la mayoría de los pagos importados no
+   traen RUT/banco/cuenta — el banco los rechazaría. La UI lo marca
+   («⚠ falta…»); alguien tiene que completarlos.
+4. **Multi-firma CAPEX N1–N6**: el nivel se calcula y muestra; el flujo de
+   firmas por nivel (N4 = comité FIP, etc.) no está implementado.
+5. **Dominio propio** (hoy URL de Vercel) y monitoreo de errores (Sentry o
+   similar).
+6. Presupuestos de las otras 7 entidades: la plataforma está lista; faltan
+   los datos (ahora pueden cargarlos ellos mismos por Excel).
+
+## 9. Dónde está cada cosa
+
+- Especificaciones e informes: `specs/` (prompts maestros, spec de cada fase,
+  informe de rendimiento).
+- Documentos de contexto FUERA del repo (working dir padre): prompt maestro
+  original, transcripción del audio del directorio, `DATOS-PRODUCCION.md`
+  (URL de claim ya usada, datos de la base), prompt de avisos/pagos.
+- Guía de usuario viva: `/guia` en la app (texto en `src/lib/guia.ts`).
+- Flujo visual (artifact privado, compartible): "Cómo funciona Presupuestos
+  CEHTA" en claude.ai/code/artifacts.

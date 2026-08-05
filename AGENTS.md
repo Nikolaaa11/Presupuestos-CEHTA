@@ -10,7 +10,7 @@ En particular sobre Next 16: `params`/`searchParams` son **Promises** (usar `awa
 
 ## Qué es esta app
 
-Plataforma de presupuestos anuales del fondo CEHTA. Cada una de las 9 entidades (AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI) carga su presupuesto del año **mes a mes** en 3 módulos: **Ventas** (cliente × mes, con tipo contrato/proyección), **Gastos** (ítem × mes por categoría) y **CAPEX** (inversiones con mes requerido, plazo y fuente de financiamiento). El fondo (FUND_ADMIN) consolida y aprueba. Spec de la fase actual: `specs/`.
+Plataforma de presupuestos y tesorería del fondo CEHTA. Cada una de las **10 entidades** (AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI, PANIMAVIDA) carga su presupuesto del año **mes a mes** en 3 módulos: **Ventas** (cliente × mes, con tipo contrato/proyección), **Gastos** (ítem × mes por categoría, con marcado de pagado) y **CAPEX** (inversiones con mes requerido, plazo, fuente y cronograma de pago por etapas). Los tres se cargan también por **plantilla Excel**. El módulo **Bancos** maneja cartolas, órdenes de compra y el **circuito de pagos** (Guido libera → Vicky sube comprobante → Guido confirma), con nómina bancaria Excel y bitácora append-only. El presupuesto se aprueba a **dos manos** (encargado envía → Vicky revisa → Guido aprueba; quien revisó no aprueba). Spec de la fase actual: `specs/`.
 
 ## Stack y comandos
 
@@ -44,7 +44,9 @@ Usuarios demo: `admin@cehta.cl`/`Cehta2026!` (FUND_ADMIN) · `demo.<código>@ceh
 
 **Codex NO toca** (zona de Claude/Fable — si necesitás un cambio acá, dejá un comentario `// PROPUESTA:` en tu código y seguí):
 - `prisma/schema.prisma`, `prisma/migrations/**`, `prisma/seed.ts`
-- `src/auth.ts`, `src/lib/{prisma,authz,money,capex,budget}.ts`
+- `src/auth.ts` y **todo `src/lib/**`** (dinero, authz, reglas de negocio, parsers, avisos, guía)
+- `src/app/api/**` (rutas de subida/descarga: seguridad y upsert)
+- `src/app/(app)/bancos/**`, `src/app/(app)/capex/**`, `budget-actions.ts` (circuitos con separación de funciones)
 - `src/generated/**` (autogenerado), `scripts/**`, `AGENTS.md`, `CLAUDE.md`, `.env*`
 
 **Codex SÍ es dueño de** (según el spec de la fase en `specs/`):

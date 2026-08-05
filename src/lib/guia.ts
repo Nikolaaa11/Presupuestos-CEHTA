@@ -50,6 +50,12 @@ const encargado: Guia = {
     "Vos armás el presupuesto de tu empresa: cuánto esperás vender, cuánto vas a gastar y qué inversiones necesitás. Cuando está listo lo mandás al fondo, que lo revisa y lo aprueba.",
   pasos: [
     {
+      titulo: "Cargá por Excel si ya tenés los datos armados",
+      detalle:
+        "En Ventas, Gastos y CAPEX está el botón «Importar Excel»: descargá la plantilla, llenala y subila. La importación actualiza las líneas que ya existen y crea las nuevas — nunca borra, y lo que no entra te vuelve con fila y motivo. Acordate de borrar las filas de EJEMPLO.",
+      href: "/ventas",
+    },
+    {
       titulo: "Cargá tus ventas mes a mes",
       detalle:
         "Una fila por cliente, y el monto en el mes que esperás facturarlo. Marcá si es contrato firmado o proyección: el fondo lee distinto un ingreso comprometido que uno estimado.",
@@ -64,8 +70,14 @@ const encargado: Guia = {
     {
       titulo: "Cargá el CAPEX del año",
       detalle:
-        "Cada inversión con el mes en que la necesitás, el plazo y de dónde saldría la plata. Si el proyecto va a banco, completá el caso bancable: es lo que mira el comité.",
+        "Cada inversión con el mes en que la necesitás, el plazo y de dónde saldría la plata. Si el proyecto va a banco, completá el caso bancable: es lo que mira el comité. Adentro del caso podés armar el cronograma de pago por etapas (30% al pedido, 70% contra entrega) — el panel avisa cuando se acerca cada desembolso.",
       href: "/capex",
+    },
+    {
+      titulo: "Marcá los gastos que ya se pagaron",
+      detalle:
+        "En la grilla de Gastos, la columna «Pagado» se tilda en cualquier momento (también con el presupuesto aprobado: los pagos ocurren después). Si un movimiento de Bancos calza con el monto, la plataforma lo sugiere — pero nunca marca sola: confirmás vos.",
+      href: "/gastos",
     },
     {
       titulo: "Revisá el flujo antes de mandarlo",
@@ -140,6 +152,12 @@ const administradora: Guia = {
         "Cuando el dueño libera un lote, se genera la nómina para el banco. Hecha la transferencia, cargás el comprobante y el pago queda «En transferencia» hasta que el dueño lo confirme.",
       href: "/bancos",
     },
+    {
+      titulo: "Completá los datos bancarios que faltan",
+      detalle:
+        "Cada movimiento muestra «✓ se puede pagar» cuando tiene RUT, banco y cuenta completos, o «⚠ falta…» cuando no. Completalos con «Editar» antes de que el dueño libere: el banco rechaza transferencias incompletas. Al ponerles fecha, además, el aviso de vencimiento se activa solo.",
+      href: "/bancos",
+    },
   ],
   noLeToca: [
     { que: "Aprobar presupuestos", quien: "Esa firma es del dueño, después de tu revisión" },
@@ -167,6 +185,12 @@ const dueno: Guia = {
   resumen:
     "Vos firmás. Aprobás los presupuestos que la administradora ya revisó, y en pagos autorizás la salida de plata y confirmás que se transfirió.",
   pasos: [
+    {
+      titulo: "Mirá los avisos de pago al entrar",
+      detalle:
+        "El panel del dashboard junta lo que vence: órdenes de compra con saldo pendiente y etapas de CAPEX del mes. Las OCs sin fecha programada aparecen resumidas — al ponerles fecha en Bancos, el aviso se activa solo.",
+      href: "/",
+    },
     {
       titulo: "Aprobá lo que ya está revisado",
       detalle:
