@@ -1,4 +1,5 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
+import { ImportarExcel } from "@/components/budget-grid/importar-excel";
 import { YearSelector } from "@/components/budget-grid/year-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { getBudgetYears, getCurrentBudget, isEditableStatus, resolveViewCompany, resolveYear } from "@/lib/budget";
@@ -95,6 +96,11 @@ export default async function GastosPage({
         </div>
       </ModuleHeader>
       {editable ? <EditableBanner /> : <ReadOnlyBanner status={budget.status} />}
+      {editable && (
+        <div className="flex justify-end">
+          <ImportarExcel modulo="gastos" year={year} />
+        </div>
+      )}
       <ExpenseGrid
         budgetId={budget.id}
         lines={lines}

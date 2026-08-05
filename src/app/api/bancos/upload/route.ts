@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { parseWorkbook, movementFingerprint, type CellValue } from "@/lib/bank-import";
+import { revisarZip } from "@/lib/zip-safety";
 
 /**
  * Subida de planillas bancarias (módulo Bancos).
@@ -68,9 +69,17 @@ export async function POST(request: Request) {
     return Response.json({ error: "Solo podés subir planillas de tu empresa" }, { status: 403 });
   }
 
+  // Bomba de descompresión: el ZIP declara sus tamaños descomprimidos y acá
+  // se rechazan ANTES de que SheetJS infle nada (sheetRows no protege el XML).
+  const rawBuffer = Buffer.from(await file.arrayBuffer());
+  const zip = revisarZip(rawBuffer);
+  if (!zip.ok) {
+    return Response.json({ error: `Archivo rechazado: ${zip.motivo}` }, { status: 400 });
+  }
+
   let workbook: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(Buffer.from(await file.arrayBuffer()), {
+    workbook = XLSX.read(rawBuffer, {
       type: "buffer",
       sheetRows: MAX_SHEET_ROWS, // corta el rango declarado: mata el DoS por <dimension> inflada
       dense: true,

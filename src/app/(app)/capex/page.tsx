@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getBudgetYears, getCurrentBudget, isEditableStatus, resolveViewCompany, resolveYear } from "@/lib/budget";
 import { formatMoney, toClp, type CurrencyCode, type Fx } from "@/lib/money";
 import { CapexManager, type CapexItemView } from "./capex-manager";
+import { ImportarExcel } from "@/components/budget-grid/importar-excel";
 
 const FX_FALLBACK: Fx = { ufToClp: "39200", usdToClp: "950" };
 
@@ -118,6 +119,12 @@ export default async function CapexPage({
       {!editable && (
         <div className="rounded-lg border border-lavender bg-lavender-bg px-4 py-3 text-sm font-medium text-brand-dark">
           Presupuesto {budget.status.toLocaleLowerCase("es-CL")} — solo lectura
+        </div>
+      )}
+
+      {editable && (
+        <div className="flex justify-end">
+          <ImportarExcel modulo="capex" year={year} />
         </div>
       )}
 
