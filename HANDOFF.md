@@ -1,6 +1,6 @@
 # HANDOFF — Presupuestos CEHTA
 
-> Actualizado: 2026-08-10. Para quien continúe el trabajo: una persona nueva,
+> Actualizado: 2026-08-14. Para quien continúe el trabajo: una persona nueva,
 > Guido/Vicky operando, o una sesión nueva de Claude/Codex. Complementa
 > `README.md` (qué hace la app) y `AGENTS.md` (reglas para agentes) — acá está
 > lo que no se deduce del código: estado, decisiones, operación y pendientes.
@@ -80,6 +80,31 @@ Pagos:       PENDIENTE ─libera→ LIBERADO ─comprobante→ EN_TRANSFERENCIA 
 8. **Sin middleware.ts**: Next 16 acá protege en layouts y server actions.
    `params`/`searchParams` son Promises.
 
+### 4-bis. Abonos y nómina Santander (2026-08-14)
+
+- **Pantalla inicial de Bancos = "Abonos por referencia"**: cada factura u
+  orden con Total / Abonado / Diferencia (Decimal, server-side) y el detalle
+  de cada abono (fecha, descripción, monto, datos bancarios, estado).
+  Solo agrupan las referencias con NÚMERO — "Remuneración" ×80 armaba un
+  falso grupo de $200M que encabezaba la pantalla.
+- **La nómina del lote es el formato oficial del Santander** (13 columnas
+  A–M, verificadas contra los archivos reales X24/X25 del fondo), con la
+  cuenta origen configurable por empresa en `/configuracion`, código SBIF del
+  banco destino, RUT sin puntos y K/L como fórmula `=I`. Más una hoja
+  **Control de abonos** donde la Diferencia es fórmula `=B-C-D`: se descuenta
+  sola al editar.
+- **Nunca inventar un código de banco ni un RUT**: `codigoBanco` devuelve null
+  si no reconoce (celda vacía + aviso en el Resumen) y `rutParaBanco` valida
+  el dígito verificador. Un código válido pero equivocado manda la plata al
+  banco que no es; una celda vacía solo obliga a completarla a mano.
+- **No todo lo PENDIENTE es liberable** (`motivoNoLiberable`): un abono
+  recibido pondría en la nómina una orden de transferir hacia afuera la plata
+  que nos pagaron; una fila del registro de OC pagaría el saldo entero de la
+  orden duplicando las cuotas.
+- **Sobrepago**: si las cartolas superan el total que declara el registro
+  (típico duplicado por re-importación), no se estira el total — se marca
+  "pagado de más" para que alguien lo revise.
+
 ## 5. Operación
 
 ```bash
@@ -110,6 +135,8 @@ Nada se declara terminado sin verificarlo contra el server real:
 | `verify-guia-prod.mjs` | Guía por rol: cada uno ve lo suyo (16 checks) |
 | `verify-avisos-prod.mjs` | Avisos, avance OC sin doble conteo, etapas (14) |
 | `verify-import-prod.mjs` | Plantillas, botón, EJEMPLO, guard de rol (6) — no muta datos |
+| `verify-abonos-prod.mjs` | Abonos por referencia y cuenta origen (5) — no muta datos |
+| `test-nomina-santander.mjs` | E2E local de la nómina Santander (12 checks, limpia tras sí) |
 | `test-import-presupuesto.mjs` | E2E local de importación (19 checks, limpia tras sí) |
 | `qa-datos.mjs` | Invariantes de datos contra la base (11 checks) |
 | `listar-usuarios.mjs` | Las 13 cuentas entran de verdad |
