@@ -135,6 +135,113 @@ describe("avance por orden de compra", () => {
   });
 });
 
+describe("abonos por referencia (caso real Resintech: factura en 4 abonos)", () => {
+  const abono = (
+    over: Partial<import("../avisos-core").MovimientoAbono>,
+  ): import("../avisos-core").MovimientoAbono => ({
+    id: Math.random().toString(36).slice(2),
+    reference: "Factura 541",
+    description: "Resintech Ltda",
+    debit: "5000000",
+    estado: "TRANSFERIDO",
+    date: null,
+    rut: "76.058.363-4",
+    bankName: "Banco de Chile",
+    accountNumber: "3300036508",
+    companyCode: "RHO",
+    companyName: "RHO",
+    esRegistroOC: false,
+    ...over,
+  });
+
+  it("agrupa una factura pagada en abonos, aunque no sea OC####", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const grupos = agruparAbonosPorReferencia([
+      abono({ date: new Date("2026-07-01") }),
+      abono({ date: new Date("2026-07-08") }),
+      abono({ date: new Date("2026-07-15") }),
+      abono({ debit: "484578", estado: "PENDIENTE", date: new Date("2026-07-22") }),
+    ]);
+    expect(grupos).toHaveLength(1);
+    expect(grupos[0].referencia).toBe("Factura 541");
+    expect(grupos[0].total).toBe("15484578.00");
+    expect(grupos[0].avanzado).toBe("15000000.00");
+    expect(grupos[0].pendiente).toBe("484578.00"); // la diferencia se descuenta sola
+    expect(grupos[0].abonos).toHaveLength(4);
+    expect(grupos[0].abonos[0].fecha).toContain("2026-07-01"); // ordenados por fecha
+    expect(grupos[0].abonos[3].estado).toBe("PENDIENTE");
+    expect(grupos[0].abonos[0]).toMatchObject({ banco: "Banco de Chile", cuenta: "3300036508" });
+  });
+
+  it("un pago suelto (1 movimiento, sin registro) no arma grupo", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    expect(agruparAbonosPorReferencia([abono({ reference: "Factura 999" })])).toHaveLength(0);
+  });
+
+  // Regresión: sin filtro, las 80 filas "Remuneración" de la cartola real
+  // armaban un grupo de $200 millones que encabezaba la pantalla inicial.
+  it("las categorías recurrentes de cartola NO son documentos con abonos", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const recurrentes = ["Remuneración", "Caja", "Previred", "Notaría", "Imp Unico"];
+    for (const ref of recurrentes) {
+      const grupos = agruparAbonosPorReferencia([
+        abono({ reference: ref, id: `${ref}1` }),
+        abono({ reference: ref, id: `${ref}2` }),
+        abono({ reference: ref, id: `${ref}3`, estado: "PENDIENTE" }),
+      ]);
+      expect(grupos, `${ref} no debería armar grupo`).toHaveLength(0);
+    }
+  });
+
+  it("los documentos con número sí arman grupo", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    for (const ref of ["Factura 541", "OC0017", "Boleta 12/2026"]) {
+      const grupos = agruparAbonosPorReferencia([
+        abono({ reference: ref, id: `${ref}1` }),
+        abono({ reference: ref, id: `${ref}2` }),
+      ]);
+      expect(grupos, `${ref} debería armar grupo`).toHaveLength(1);
+    }
+  });
+
+  // Regresión: un duplicado por re-importación estiraba el total hasta lo
+  // pagado y la orden aparecía "saldada al 100%", escondiendo el sobrepago.
+  it("detecta el sobrepago en vez de estirar el total (duplicado de OC0005)", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const grupos = agruparAbonosPorReferencia([
+      abono({ reference: "OC0005", id: "reg", esRegistroOC: true, debit: "9208998", estado: "TRANSFERIDO" }),
+      abono({ reference: "OC0005", id: "p1", debit: "4604499", estado: "TRANSFERIDO" }),
+      abono({ reference: "OC0005", id: "p2", debit: "4604499", estado: "TRANSFERIDO" }),
+      abono({ reference: "OC0005", id: "dup", debit: "4604499", estado: "TRANSFERIDO" }), // duplicado
+    ]);
+    expect(grupos[0].total).toBe("9208998.00"); // el total NO se estira
+    expect(grupos[0].sobrepagado).toBe(true);
+    expect(grupos[0].excedente).toBe("4604499.00");
+  });
+
+  it("sin duplicado no hay sobrepago", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const grupos = agruparAbonosPorReferencia([
+      abono({ reference: "OC0005", id: "reg", esRegistroOC: true, debit: "9208998", estado: "TRANSFERIDO" }),
+      abono({ reference: "OC0005", id: "p1", debit: "4604499", estado: "TRANSFERIDO" }),
+      abono({ reference: "OC0005", id: "p2", debit: "4604499", estado: "TRANSFERIDO" }),
+    ]);
+    expect(grupos[0].sobrepagado).toBe(false);
+    expect(grupos[0].excedente).toBe("0.00");
+  });
+
+  it("los grupos con saldo pendiente van primero (mayor diferencia arriba)", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const grupos = agruparAbonosPorReferencia([
+      abono({ reference: "Factura 100", id: "a1" }),
+      abono({ reference: "Factura 100", id: "a2" }),
+      abono({ reference: "Factura 200", id: "b1" }),
+      abono({ reference: "Factura 200", id: "b2", estado: "PENDIENTE", debit: "9000000" }),
+    ]);
+    expect(grupos.map((g) => g.referencia)).toEqual(["Factura 200", "Factura 100"]);
+  });
+});
+
 describe("días de calendario (los movimientos se guardan a las 12:00Z)", () => {
   it("una OC que vence HOY da 0 aunque ya sea la tarde", () => {
     expect(diasDeCalendario(new Date("2026-08-04T15:00:00Z"), new Date("2026-08-04T12:00:00Z"))).toBe(0);

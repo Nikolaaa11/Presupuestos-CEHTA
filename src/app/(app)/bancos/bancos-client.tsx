@@ -48,16 +48,30 @@ export type LoteView = {
 
 export type BitacoraEntry = { id: string; quien: string; accion: string; detalle: string | null; cuando: string };
 
-/** Avance de una orden de compra: los montos llegan YA formateados del server. */
-export type AvanceOCView = {
+/** Un abono individual (transferencia parcial), YA formateado del server. */
+export type AbonoView = {
+  id: string;
+  fecha: string;
+  descripcion: string | null;
+  monto: string;
+  datosBancarios: string;
+  estado: string;
+  esRegistro: boolean;
+};
+
+/** Grupo de abonos por referencia: Total, Abonado, Diferencia y el detalle. */
+export type GrupoAbonosView = {
   referencia: string;
   total: string;
-  avanzado: string;
-  pendiente: string;
+  abonado: string;
+  diferencia: string;
   porcentaje: number;
-  proximoPago: string | null;
-  movimientos: number;
   completa: boolean;
+  /** Las cartolas pagaron más de lo que declara la orden. */
+  sobrepagado: boolean;
+  excedente: string;
+  movimientos: number;
+  abonos: AbonoView[];
 };
 
 type Permisos = { libera: boolean; comprobante: boolean; edita: boolean };
@@ -169,14 +183,14 @@ const MovementRow = memo(function MovementRow({
 // ─────────────────────────── Componente principal ───────────────────────────
 
 export function BancosClient({
-  companyCode, sheets, selectedSheetId, movements: initial, lotes, avancesOC, bitacora, permisos, quienSoy,
+  companyCode, sheets, selectedSheetId, movements: initial, lotes, gruposAbonos, bitacora, permisos, quienSoy,
 }: {
   companyCode: string;
   sheets: SheetView[];
   selectedSheetId: string | null;
   movements: MovementView[];
   lotes: LoteView[];
-  avancesOC: AvanceOCView[];
+  gruposAbonos: GrupoAbonosView[];
   bitacora: BitacoraEntry[];
   permisos: Permisos;
   quienSoy: string;
@@ -317,6 +331,101 @@ export function BancosClient({
       {error && <p className="rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger" role="alert">{error}</p>}
       {aviso && <p className="rounded-lg bg-ok-bg px-3.5 py-2.5 text-sm text-ok" role="status">{aviso}</p>}
 
+      {/* Abonos por referencia — la pantalla inicial del módulo: cada factura,
+          OC o proveedor con su Total, lo Abonado y la Diferencia (calculada en
+          el server, se descuenta sola). Cada grupo se expande a sus abonos:
+          fecha, descripción, monto, datos bancarios y estado. */}
+      {gruposAbonos.length > 0 && (
+        <section className="rounded-xl border border-line bg-white">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-5 py-3">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-brand">
+              Abonos por referencia
+            </h2>
+            <span className="text-xs text-ink-soft">
+              {gruposAbonos.filter((g) => !g.completa).length} con diferencia pendiente ·{" "}
+              {gruposAbonos.filter((g) => g.completa).length} completas
+            </span>
+          </div>
+          <ul className="max-h-[32rem] divide-y divide-line/70 overflow-y-auto">
+            {gruposAbonos.map((g) => (
+              <li key={g.referencia}>
+                <details className="group">
+                  <summary className="cursor-pointer list-none px-5 py-3 hover:bg-soft/60">
+                    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                      <span className="text-brand transition group-open:rotate-90 inline-block text-xs" aria-hidden="true">▶</span>
+                      <span className="min-w-24 text-sm font-semibold text-ink">{g.referencia}</span>
+                      <span className="cell-num text-xs text-ink-soft">Total {g.total}</span>
+                      <span className="cell-num text-xs text-ok">Abonado {g.abonado}</span>
+                      <span className={`cell-num text-xs font-semibold ${g.completa ? "text-ok" : "text-warn"}`}>
+                        {g.completa ? "✓ saldada" : `Diferencia ${g.diferencia}`}
+                      </span>
+                      {g.sobrepagado && (
+                        <span className="rounded-full bg-danger-bg px-2 py-0.5 text-[11px] font-semibold text-danger" title="Los pagos superan el total declarado en la orden — revisá si hay una fila duplicada">
+                          ⚠ pagado de más {g.excedente}
+                        </span>
+                      )}
+                      <span className="ml-auto text-xs text-ink-soft">
+                        {g.porcentaje}% · {g.movimientos} mov.
+                      </span>
+                    </div>
+                    <div
+                      className="mt-2 h-1.5 overflow-hidden rounded-full bg-soft"
+                      role="progressbar"
+                      aria-valuenow={g.porcentaje}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`Avance de ${g.referencia}`}
+                    >
+                      <div
+                        className={`h-full rounded-full ${g.completa ? "bg-ok" : "bg-brand"}`}
+                        style={{ width: `${Math.min(g.porcentaje, 100)}%` }}
+                      />
+                    </div>
+                  </summary>
+                  <div className="overflow-x-auto border-t border-line/70 bg-soft/40 px-5 py-3">
+                    <table className="w-full border-collapse text-xs">
+                      <thead className="text-left uppercase tracking-wide text-ink-soft">
+                        <tr>
+                          <th className="py-1.5 pr-4">Fecha</th>
+                          <th className="py-1.5 pr-4">Descripción</th>
+                          <th className="py-1.5 pr-4 text-right">Monto abono</th>
+                          <th className="py-1.5 pr-4">Datos bancarios</th>
+                          <th className="py-1.5">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.abonos.map((b) => (
+                          <tr key={b.id} className="border-t border-line/60">
+                            <td className="whitespace-nowrap py-1.5 pr-4 text-ink">{b.fecha}</td>
+                            <td className="max-w-72 py-1.5 pr-4 text-ink">
+                              {b.descripcion ?? "—"}
+                              {b.esRegistro && (
+                                <span className="ml-2 rounded bg-lavender-bg px-1.5 py-0.5 text-[10px] font-semibold text-brand">
+                                  registro
+                                </span>
+                              )}
+                            </td>
+                            <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold text-ink">
+                              {b.monto}
+                            </td>
+                            <td className="py-1.5 pr-4 text-ink-soft">{b.datosBancarios}</td>
+                            <td className="whitespace-nowrap py-1.5">
+                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${ESTADO_CHIP[b.estado] ?? "bg-soft text-ink-soft border-line"}`}>
+                                {ESTADO_TEXTO[b.estado] ?? b.estado}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* Bitácora */}
       {verBitacora && (
         <section className="rounded-xl border border-line bg-white">
@@ -336,59 +445,6 @@ export function BancosClient({
               ))}
             </ul>
           )}
-        </section>
-      )}
-
-      {/* Avance por orden de compra — el "pago por etapas" de tesorería:
-          cada OC se paga en varios movimientos; acá se ve qué % ya avanzó */}
-      {avancesOC.length > 0 && (
-        <section className="rounded-xl border border-line bg-white">
-          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-line px-5 py-3">
-            <h2 className="text-sm font-bold uppercase tracking-wide text-brand">
-              Avance por orden de compra
-            </h2>
-            <span className="text-xs text-ink-soft">
-              {avancesOC.filter((a) => !a.completa).length} con saldo pendiente ·{" "}
-              {avancesOC.filter((a) => a.completa).length} completas
-            </span>
-          </div>
-          <ul className="max-h-[28rem] divide-y divide-line/70 overflow-y-auto">
-            {avancesOC.map((a) => (
-              <li key={a.referencia} className="px-5 py-3">
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                  <span className="min-w-20 text-sm font-semibold text-ink">{a.referencia}</span>
-                  <span className={`text-sm font-bold ${a.completa ? "text-ok" : "text-brand"}`}>
-                    {a.porcentaje}%
-                  </span>
-                  <span className="cell-num text-xs text-ink-soft">
-                    {a.avanzado} de {a.total}
-                  </span>
-                  {!a.completa && (
-                    <span className="cell-num text-xs font-medium text-warn">
-                      pendiente {a.pendiente}
-                    </span>
-                  )}
-                  {a.proximoPago && !a.completa && (
-                    <span className="text-xs text-ink-soft">próximo pago {a.proximoPago}</span>
-                  )}
-                  <span className="ml-auto text-xs text-ink-soft">{a.movimientos} mov.</span>
-                </div>
-                <div
-                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-soft"
-                  role="progressbar"
-                  aria-valuenow={a.porcentaje}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`Avance de ${a.referencia}`}
-                >
-                  <div
-                    className={`h-full rounded-full ${a.completa ? "bg-ok" : "bg-brand"}`}
-                    style={{ width: `${Math.min(a.porcentaje, 100)}%` }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
         </section>
       )}
 

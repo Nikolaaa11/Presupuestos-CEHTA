@@ -153,6 +153,12 @@ const administradora: Guia = {
       href: "/bancos",
     },
     {
+      titulo: "Mirá los abonos por referencia al entrar a Bancos",
+      detalle:
+        "La primera sección junta cada factura u orden con su Total, lo Abonado y la Diferencia que falta — se descuenta sola. Abrí una para ver cada abono con su fecha, monto, datos bancarios y estado.",
+      href: "/bancos",
+    },
+    {
       titulo: "Completá los datos bancarios que faltan",
       detalle:
         "Cada movimiento muestra «✓ se puede pagar» cuando tiene RUT, banco y cuenta completos, o «⚠ falta…» cuando no. Completalos con «Editar» antes de que el dueño libere: el banco rechaza transferencias incompletas. Al ponerles fecha, además, el aviso de vencimiento se activa solo.",
@@ -238,7 +244,7 @@ const dueno: Guia = {
     },
     {
       p: "¿Qué es la nómina de transferencias?",
-      r: "Un Excel con formato de banco que junta todo lo que liberaste en ese lote: RUT, cuenta, monto y glosa. Se descarga desde Bancos.",
+      r: "El Excel de carga masiva del Santander, con sus 13 columnas exactas (cuenta origen, código de banco, RUT sin puntos, monto, glosas). Trae además una hoja «Control de abonos» donde la diferencia entre el total y lo abonado se descuenta sola. Se descarga desde el lote, en Bancos.",
     },
   ],
 };
@@ -267,7 +273,8 @@ const fundAdmin: Guia = {
     },
     {
       titulo: "Administrá empresas y usuarios",
-      detalle: "Datos de las entidades, categorías de gasto y tipos de cambio.",
+      detalle:
+        "Datos de las entidades, categorías de gasto, tipos de cambio y la cuenta origen de cada empresa — la cuenta Santander desde la que paga, que va en la nómina de transferencias masivas.",
       href: "/configuracion",
     },
   ],

@@ -1,8 +1,10 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { MONTH_KEYS } from "@/lib/money";
+import { esPlanillaRegistroOC } from "@/lib/tesoreria";
 import {
   agruparAvancesOC,
+  agruparAbonosPorReferencia,
   avisosDeOC,
   avisosDeEtapas,
   pendientesSinFecha,
@@ -10,6 +12,7 @@ import {
   type AvanceOC,
   type AvisoOC,
   type AvisoCapex,
+  type GrupoAbonos,
   type SugerenciaPago,
 } from "@/lib/avisos-core";
 
@@ -36,12 +39,6 @@ export type Avisos = {
 
 export type { AvanceOC, AvisoOC, AvisoCapex };
 
-/**
- * Distingue las planillas de REGISTRO de órdenes de compra (una fila por
- * orden, con su total) de las cartolas (pagos efectivos). La misma OC vive en
- * ambas con la misma referencia: sin esta marca se contaría doble.
- */
-const esPlanillaRegistroOC = (nombre: string) => /órdenes?\s+de\s+compra/i.test(nombre);
 
 async function movimientosParaAgrupar(companyId?: string) {
   const movimientos = await prisma.bankMovement.findMany({
@@ -69,9 +66,49 @@ async function movimientosParaAgrupar(companyId?: string) {
   }));
 }
 
-/** Avance de todas las órdenes de compra (para la sección de Bancos). */
-export async function avancesOC(companyId?: string): Promise<AvanceOC[]> {
-  return agruparAvancesOC(await movimientosParaAgrupar(companyId));
+export type { GrupoAbonos };
+
+/**
+ * Abonos por referencia con su detalle fila a fila — la vista inicial de
+ * Bancos: cada factura/OC/proveedor con Total, Abonado, Diferencia y sus
+ * transferencias parciales (fecha, descripción, monto, datos bancarios, estado).
+ */
+export async function abonosPorReferencia(companyId: string): Promise<GrupoAbonos[]> {
+  const movimientos = await prisma.bankMovement.findMany({
+    where: {
+      debit: { gt: 0 },
+      reference: { not: null },
+      sheet: { companyId },
+    },
+    select: {
+      id: true,
+      reference: true,
+      description: true,
+      debit: true,
+      estado: true,
+      date: true,
+      rut: true,
+      bankName: true,
+      accountNumber: true,
+      sheet: { select: { name: true, company: { select: { code: true, name: true } } } },
+    },
+  });
+  return agruparAbonosPorReferencia(
+    movimientos.map((m) => ({
+      id: m.id,
+      reference: m.reference,
+      description: m.description,
+      debit: m.debit,
+      estado: m.estado,
+      date: m.date,
+      rut: m.rut,
+      bankName: m.bankName,
+      accountNumber: m.accountNumber,
+      companyCode: m.sheet.company.code,
+      companyName: m.sheet.company.name,
+      esRegistroOC: esPlanillaRegistroOC(m.sheet.name),
+    })),
+  );
 }
 
 /** Los avisos del panel: OCs por vencer/vencidas + etapas CAPEX próximas. */

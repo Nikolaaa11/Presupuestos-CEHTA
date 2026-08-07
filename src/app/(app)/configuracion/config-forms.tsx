@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { saveFxRate, addExpenseCategory, renameExpenseCategory } from "./actions";
+import { saveFxRate, addExpenseCategory, renameExpenseCategory, saveCuentaOrigen } from "./actions";
 
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -167,6 +167,64 @@ export function CategoriesManager({
         </button>
       </div>
 
+      {error && <p className="mt-3 rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * Cuenta origen (Santander) de cada empresa para la nómina de transferencias
+ * masivas. Un input por empresa; se guarda al salir del campo si cambió.
+ */
+export function CuentasOrigenManager({
+  companies,
+}: {
+  companies: { id: string; code: string; name: string; cuentaOrigen: string | null }[];
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [guardada, setGuardada] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
+  function guardar(companyId: string, code: string, valor: string, previo: string) {
+    if (valor.trim() === previo.trim()) return;
+    setError(null);
+    startTransition(async () => {
+      const r = await saveCuentaOrigen(companyId, valor);
+      if (!r.ok) setError(`${code}: ${r.error}`);
+      else {
+        setGuardada(code);
+        setTimeout(() => setGuardada(null), 2500);
+      }
+    });
+  }
+
+  return (
+    <div className="rounded-xl border border-line bg-white p-6">
+      <h2 className="text-sm font-bold uppercase tracking-wide text-brand">
+        Cuenta origen para transferencias masivas
+      </h2>
+      <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+        La cuenta corriente Santander desde la que paga cada empresa — va en la columna A de la
+        nómina que se carga al banco. Sin ella, la nómina sale con esa celda vacía.
+      </p>
+      <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+        {companies.map((c) => (
+          <li key={c.id} className="flex items-center gap-3">
+            <span className="w-28 shrink-0 text-xs font-semibold uppercase tracking-wide text-ink">
+              {c.code}
+            </span>
+            <input
+              defaultValue={c.cuentaOrigen ?? ""}
+              placeholder="N° de cuenta"
+              inputMode="numeric"
+              aria-label={`Cuenta origen de ${c.name}`}
+              onBlur={(e) => guardar(c.id, c.code, e.target.value, c.cuentaOrigen ?? "")}
+              className="cell-num h-9 w-44 rounded-lg border border-line px-3 text-sm outline-none focus:border-brand"
+            />
+            {guardada === c.code && <span className="text-xs font-medium text-ok">✓ guardada</span>}
+          </li>
+        ))}
+      </ul>
       {error && <p className="mt-3 rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger">{error}</p>}
     </div>
   );

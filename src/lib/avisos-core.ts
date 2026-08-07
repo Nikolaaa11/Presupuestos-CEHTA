@@ -35,6 +35,28 @@ export type MovimientoParaAgrupar = {
   esRegistroOC: boolean;
 };
 
+/** Un movimiento con el detalle necesario para listar sus abonos en pantalla. */
+export type MovimientoAbono = MovimientoParaAgrupar & {
+  id: string;
+  description: string | null;
+  rut: string | null;
+  bankName: string | null;
+  accountNumber: string | null;
+};
+
+/** Un abono individual dentro de un grupo (una transferencia parcial). */
+export type AbonoDetalle = {
+  id: string;
+  fecha: string | null; // ISO
+  descripcion: string | null;
+  monto: string;
+  rut: string | null;
+  banco: string | null;
+  cuenta: string | null;
+  estado: string;
+  esRegistro: boolean;
+};
+
 /** Avance de una orden de compra: total, cuánto va pagado y qué falta. */
 export type AvanceOC = {
   companyCode: string;
@@ -48,7 +70,19 @@ export type AvanceOC = {
   /** Fecha más antigua entre los movimientos aún PENDIENTES (la próxima a pagar). */
   fechaProximoPago: string | null;
   cantidadMovimientos: number;
+  /**
+   * Los pagos de cartola superan el total que declara el registro de la orden
+   * — típicamente una fila duplicada por re-importación. Sin esta marca el
+   * total se "estiraba" hasta lo pagado y la orden aparecía saldada al 100%,
+   * escondiendo justamente el sobrepago.
+   */
+  sobrepagado: boolean;
+  /** Cuánto se pagó de más (0 si no hay sobrepago). */
+  excedente: string;
 };
+
+/** Grupo de abonos por referencia: el avance más el detalle fila a fila. */
+export type GrupoAbonos = AvanceOC & { abonos: AbonoDetalle[] };
 
 /** Aviso: una OC con saldo pendiente cuya próxima fecha vence o ya venció. */
 export type AvisoOC = AvanceOC & {
@@ -102,23 +136,33 @@ export type AvisoCapex = {
  * Sin registro (OC solo de cartola): total = todos los pagos, avance = los no
  * pendientes. La fecha del próximo pago es la más antigua entre PENDIENTES.
  */
-export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC[] {
-  type Acum = {
-    companyCode: string;
-    companyName: string;
-    referencia: string;
-    registroPendiente: Decimal;
-    registroPagado: Decimal;
-    cartolaPendiente: Decimal;
-    cartolaPagada: Decimal;
-    tieneRegistro: boolean;
-    fechasPendientes: number[];
-    n: number;
-  };
-  const grupos = new Map<string, Acum>();
+type MovFlexible = MovimientoParaAgrupar &
+  Partial<Pick<MovimientoAbono, "id" | "description" | "rut" | "bankName" | "accountNumber">>;
+
+type Acumulado = {
+  companyCode: string;
+  companyName: string;
+  referencia: string;
+  registroPendiente: Decimal;
+  registroPagado: Decimal;
+  cartolaPendiente: Decimal;
+  cartolaPagada: Decimal;
+  tieneRegistro: boolean;
+  fechasPendientes: number[];
+  n: number;
+  abonos: AbonoDetalle[];
+};
+
+/** Acumulación compartida: la ÚNICA implementación de la semántica dual. */
+function acumularPorReferencia(
+  movimientos: MovFlexible[],
+  filtroReferencia: ((ref: string) => boolean) | null,
+): Acumulado[] {
+  const grupos = new Map<string, Acumulado>();
 
   for (const m of movimientos) {
-    if (!m.reference || !PATRON_OC.test(m.reference)) continue;
+    if (!m.reference) continue;
+    if (filtroReferencia && !filtroReferencia(m.reference)) continue;
     const monto = dec(m.debit);
     if (monto.lte(0)) continue;
 
@@ -136,6 +180,7 @@ export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC
         tieneRegistro: false,
         fechasPendientes: [],
         n: 0,
+        abonos: [],
       };
       grupos.set(key, g);
     }
@@ -149,39 +194,75 @@ export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC
     }
     if (m.estado === "PENDIENTE" && m.date) g.fechasPendientes.push(m.date.getTime());
     g.n += 1;
-  }
-
-  const avances: AvanceOC[] = [];
-  for (const g of grupos.values()) {
-    let avanzado: Decimal;
-    let total: Decimal;
-    if (g.tieneRegistro) {
-      // Pagado real: cartolas si las hay; si no, lo que el registro da por
-      // pagado (la orden pudo cerrarse antes de las cartolas importadas).
-      // max() y no suma: en las OCs cerradas ambas fuentes son la misma plata.
-      avanzado = Decimal.max(g.cartolaPagada, g.registroPagado);
-      total = avanzado.plus(g.registroPendiente);
-    } else {
-      avanzado = g.cartolaPagada;
-      total = g.cartolaPagada.plus(g.cartolaPendiente);
-    }
-    const pendiente = total.minus(avanzado);
-    const fechaProx = g.fechasPendientes.length > 0 ? new Date(Math.min(...g.fechasPendientes)) : null;
-    avances.push({
-      companyCode: g.companyCode,
-      companyName: g.companyName,
-      referencia: g.referencia,
-      total: total.toFixed(2),
-      avanzado: avanzado.toFixed(2),
-      pendiente: pendiente.toFixed(2),
-      porcentaje: total.isZero()
-        ? 0
-        : avanzado.div(total).times(100).toDecimalPlaces(0, Decimal.ROUND_DOWN).toNumber(),
-      fechaProximoPago: fechaProx?.toISOString() ?? null,
-      cantidadMovimientos: g.n,
+    g.abonos.push({
+      id: m.id ?? `${key}#${g.n}`,
+      fecha: m.date?.toISOString() ?? null,
+      descripcion: m.description ?? null,
+      monto: monto.toFixed(2),
+      rut: m.rut ?? null,
+      banco: m.bankName ?? null,
+      cuenta: m.accountNumber ?? null,
+      estado: m.estado,
+      esRegistro: m.esRegistroOC,
     });
   }
+  return [...grupos.values()];
+}
 
+/**
+ * Del acumulado al avance. Con registro: los pagos de cartola son la verdad
+ * del avance (si no hay ninguno, manda el estado del propio registro — la
+ * orden pudo cerrarse antes de las cartolas importadas; max() y no suma
+ * porque en las OCs cerradas ambas fuentes son la misma plata), y el total es
+ * avance + saldo pendiente del registro. Sin registro: total = todos los
+ * pagos, avance = los no pendientes.
+ */
+function aAvance(g: Acumulado): AvanceOC {
+  let avanzado: Decimal;
+  let total: Decimal;
+  let sobrepagado = false;
+  let excedente = dec(0);
+  if (g.tieneRegistro) {
+    avanzado = Decimal.max(g.cartolaPagada, g.registroPagado);
+    total = avanzado.plus(g.registroPendiente);
+    // Solo el registro PAGADO declara cuánto vale la orden entera (el
+    // pendiente declara el saldo, que no dice nada del total — ver OC0017).
+    // Si contra un total declarado las cartolas pagaron de más, NO se estira
+    // el total: se deja el declarado y se marca el sobrepago, que es
+    // justamente lo que alguien tiene que ir a revisar (típicamente una fila
+    // duplicada por re-importación).
+    const declarado = g.registroPagado;
+    if (declarado.gt(0) && g.registroPendiente.isZero() && g.cartolaPagada.gt(declarado)) {
+      sobrepagado = true;
+      excedente = g.cartolaPagada.minus(declarado);
+      total = declarado;
+      avanzado = declarado;
+    }
+  } else {
+    avanzado = g.cartolaPagada;
+    total = g.cartolaPagada.plus(g.cartolaPendiente);
+  }
+  const pendiente = total.minus(avanzado);
+  const fechaProx = g.fechasPendientes.length > 0 ? new Date(Math.min(...g.fechasPendientes)) : null;
+  return {
+    companyCode: g.companyCode,
+    companyName: g.companyName,
+    referencia: g.referencia,
+    total: total.toFixed(2),
+    avanzado: avanzado.toFixed(2),
+    pendiente: pendiente.toFixed(2),
+    porcentaje: total.isZero()
+      ? 0
+      : avanzado.div(total).times(100).toDecimalPlaces(0, Decimal.ROUND_DOWN).toNumber(),
+    fechaProximoPago: fechaProx?.toISOString() ?? null,
+    cantidadMovimientos: g.n,
+    sobrepagado,
+    excedente: excedente.toFixed(2),
+  };
+}
+
+export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC[] {
+  const avances = acumularPorReferencia(movimientos, (ref) => PATRON_OC.test(ref)).map(aAvance);
   // Las más atrasadas primero; las sin fecha al final, ordenadas por referencia.
   return avances.sort((a, b) => {
     if (a.fechaProximoPago && b.fechaProximoPago) return a.fechaProximoPago.localeCompare(b.fechaProximoPago);
@@ -189,6 +270,45 @@ export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC
     if (b.fechaProximoPago) return 1;
     return a.referencia.localeCompare(b.referencia);
   });
+}
+
+/**
+ * Abonos por referencia — la vista inicial de Bancos. Generaliza el avance a
+ * CUALQUIER referencia (Factura 541, OC0017, un proveedor), no solo OC####:
+ * el caso real Resintech es una factura pagada en 4 abonos parciales. Solo
+ * entran los grupos que cuentan una historia de abonos: los que tienen
+ * registro (total declarado) o más de un movimiento. La diferencia
+ * (Total − Abonado) viaja calculada con Decimal — nunca en el cliente.
+ */
+/**
+ * Una referencia es un DOCUMENTO (factura, OC, boleta) si lleva números:
+ * "Factura 541", "OC0017". Las categorías recurrentes de cartola no los
+ * llevan: "Remuneración", "Caja", "Previred", "Notaría". Sin este filtro,
+ * las 80 filas "Remuneración" de la cartola real armaban un "grupo" de $200
+ * millones que, por tener saldo pendiente, encabezaba la pantalla inicial
+ * por encima de las facturas de verdad.
+ */
+const PARECE_DOCUMENTO = /\d/;
+
+export function agruparAbonosPorReferencia(movimientos: MovimientoAbono[]): GrupoAbonos[] {
+  return acumularPorReferencia(movimientos, null)
+    .filter((g) => (g.tieneRegistro || g.n >= 2) && PARECE_DOCUMENTO.test(g.referencia))
+    .map((g) => ({
+      ...aAvance(g),
+      abonos: [...g.abonos].sort((a, b) => {
+        if (a.fecha && b.fecha) return a.fecha.localeCompare(b.fecha);
+        if (a.fecha) return -1;
+        if (b.fecha) return 1;
+        return 0;
+      }),
+    }))
+    .sort((a, b) => {
+      // Con saldo pendiente primero (mayor diferencia arriba); después completas.
+      const pa = dec(a.pendiente);
+      const pb = dec(b.pendiente);
+      if (!pa.isZero() || !pb.isZero()) return pb.comparedTo(pa);
+      return a.referencia.localeCompare(b.referencia);
+    });
 }
 
 /**

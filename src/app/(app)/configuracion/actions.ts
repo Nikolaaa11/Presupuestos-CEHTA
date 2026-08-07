@@ -17,7 +17,7 @@ const categoryNameSchema = z.string().trim().min(2, "Nombre muy corto").max(80);
 
 function failure(error: unknown): Result {
   if (error instanceof ZodError) return { ok: false, error: error.issues[0]?.message ?? "Datos inválidos" };
-  const safe = ["Solo", "Ya existe", "Categoría no encontrada"];
+  const safe = ["Solo", "Ya existe", "Categoría no encontrada", "Empresa no encontrada"];
   if (error instanceof Error && safe.some((m) => error.message.startsWith(m))) {
     return { ok: false, error: error.message };
   }
@@ -80,6 +80,28 @@ export async function renameExpenseCategory(id: string, name: unknown): Promise<
     await prisma.expenseCategory.update({ where: { id }, data: { name: parsed } });
     revalidatePath("/configuracion");
     revalidatePath("/gastos");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Cuenta corriente Santander desde la que paga cada empresa — la columna
+ * "Cuenta origen" de la nómina de transferencias masivas. Vacía = la celda A
+ * de la nómina queda en blanco y el Resumen lo advierte.
+ */
+export async function saveCuentaOrigen(companyId: string, cuenta: unknown): Promise<Result> {
+  try {
+    await requireAdmin();
+    const limpia = String(cuenta ?? "").replace(/[^\dA-Za-z]/g, "").slice(0, 30);
+    const company = await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } });
+    if (!company) throw new Error("Empresa no encontrada");
+    await prisma.company.update({
+      where: { id: companyId },
+      data: { cuentaOrigen: limpia === "" ? null : limpia },
+    });
+    for (const p of ["/bancos", "/configuracion"]) revalidatePath(p);
     return { ok: true };
   } catch (error) {
     return failure(error);

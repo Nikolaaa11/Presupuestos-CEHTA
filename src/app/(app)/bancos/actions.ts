@@ -13,6 +13,7 @@ import {
   siguienteNumeroLote,
   puede,
   alcanzaEmpresa,
+  motivoNoLiberable,
 } from "@/lib/tesoreria";
 import { formatMoney } from "@/lib/money";
 
@@ -34,7 +35,7 @@ async function cargarMovimientos(ids: string[]) {
     where: { id: { in: ids } },
     select: {
       id: true, estado: true, debit: true, credit: true, reference: true,
-      sheet: { select: { companyId: true } },
+      sheet: { select: { companyId: true, name: true } },
     },
   });
   if (movimientos.length !== ids.length) throw new Error("Movimiento no encontrado");
@@ -42,6 +43,7 @@ async function cargarMovimientos(ids: string[]) {
   if (empresas.size > 1) throw new Error("No se puede liberar pagos de distintas empresas en un mismo lote");
   return { movimientos, companyId: [...empresas][0] };
 }
+
 
 const montoDe = (m: { debit: unknown; credit: unknown }) => {
   const d = Number(String(m.debit ?? 0));
@@ -64,6 +66,13 @@ export async function liberarPagos(movementIds: string[], nota?: string): Promis
     const yaLiberados = movimientos.filter((m) => m.estado !== "PENDIENTE");
     if (yaLiberados.length > 0) {
       throw new Error(`No se puede liberar: ${yaLiberados.length} pago(s) ya están en el circuito`);
+    }
+
+    const noLiberables = movimientos
+      .map((m) => motivoNoLiberable(m))
+      .filter((x): x is string => x !== null);
+    if (noLiberables.length > 0) {
+      throw new Error(`No se puede liberar: ${noLiberables[0]}`);
     }
 
     const numero = await siguienteNumeroLote(companyId);

@@ -1,10 +1,10 @@
 import { CompanySelector } from "@/components/budget-grid/company-selector";
 import { prisma } from "@/lib/prisma";
 import { resolveViewCompany } from "@/lib/budget";
-import { avancesOC } from "@/lib/avisos";
+import { abonosPorReferencia } from "@/lib/avisos";
 import { dec, formatMoney } from "@/lib/money";
 import { ETIQUETA_ACCION, puede, ROLES_DUENO, ROLES_COMPROBANTE, ROLES_EDICION } from "@/lib/tesoreria";
-import { BancosClient, type AvanceOCView, type BitacoraEntry, type LoteView, type MovementView, type SheetView } from "./bancos-client";
+import { BancosClient, type AbonoView, type GrupoAbonosView, type BitacoraEntry, type LoteView, type MovementView, type SheetView } from "./bancos-client";
 
 const fechaHora = (d: Date) =>
   new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
@@ -50,20 +50,37 @@ export default async function BancosPage({
       where: { estado: "PENDIENTE", sheet: { companyId: company.id } },
       _count: { _all: true },
     }),
-    avancesOC(company.id),
+    abonosPorReferencia(company.id),
   ]);
 
-  // Avance por orden de compra: el "pago por etapas" de Bancos. Las OCs vienen
-  // como varios movimientos con la misma referencia; acá viajan ya formateados.
-  const avanceViews: AvanceOCView[] = avances.map((a) => ({
+  // Abonos por referencia: cada factura/OC/proveedor con su Total, lo Abonado
+  // y la Diferencia (calculada acá con Decimal, jamás en el cliente), más el
+  // detalle de cada abono. Todo viaja formateado.
+  const abonoViews: GrupoAbonosView[] = avances.map((a) => ({
     referencia: a.referencia,
     total: formatMoney(a.total, "CLP"),
-    avanzado: formatMoney(a.avanzado, "CLP"),
-    pendiente: formatMoney(a.pendiente, "CLP"),
+    abonado: formatMoney(a.avanzado, "CLP"),
+    diferencia: formatMoney(a.pendiente, "CLP"),
     porcentaje: a.porcentaje,
-    proximoPago: a.fechaProximoPago ? fechaCorta(new Date(a.fechaProximoPago)) : null,
-    movimientos: a.cantidadMovimientos,
     completa: dec(a.pendiente).lte(0),
+    sobrepagado: a.sobrepagado,
+    excedente: formatMoney(a.excedente, "CLP"),
+    movimientos: a.cantidadMovimientos,
+    abonos: a.abonos.map(
+      (b): AbonoView => ({
+        id: b.id,
+        fecha: b.fecha ? fechaCorta(new Date(b.fecha)) : "—",
+        descripcion: b.descripcion,
+        monto: formatMoney(b.monto, "CLP"),
+        // Las filas de registro de OC no son transferencias: no tienen ni
+        // necesitan datos bancarios, así que no se las advierte.
+        datosBancarios:
+          [b.rut, b.banco, b.cuenta].filter(Boolean).join(" · ") ||
+          (b.esRegistro ? "—" : "⚠ sin datos bancarios"),
+        estado: b.estado,
+        esRegistro: b.esRegistro,
+      }),
+    ),
   }));
 
   const pendingBySheet = new Map(pendingGroups.map((g) => [g.sheetId, g._count._all]));
@@ -160,7 +177,7 @@ export default async function BancosPage({
         selectedSheetId={selectedSheetId}
         movements={movements}
         lotes={loteViews}
-        avancesOC={avanceViews}
+        gruposAbonos={abonoViews}
         bitacora={bitacoraViews}
         permisos={{
           libera: puede(user, ROLES_DUENO),

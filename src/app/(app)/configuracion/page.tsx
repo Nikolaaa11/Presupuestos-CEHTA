@@ -2,18 +2,22 @@ import { prisma } from "@/lib/prisma";
 import { requireFundAdmin } from "@/lib/authz";
 import { BUDGET_YEAR } from "@/lib/budget";
 import { APPROVAL_LEVELS } from "@/lib/capex";
-import { FxForm, CategoriesManager } from "./config-forms";
+import { FxForm, CategoriesManager, CuentasOrigenManager } from "./config-forms";
 
 const FX_DEFAULT = { ufToClp: "39200", usdToClp: "950" };
 
 export default async function ConfiguracionPage() {
   await requireFundAdmin();
 
-  const [fx, categories] = await Promise.all([
+  const [fx, categories, companies] = await Promise.all([
     prisma.fxRate.findUnique({ where: { year: BUDGET_YEAR } }),
     prisma.expenseCategory.findMany({
       orderBy: { sortOrder: "asc" },
       include: { _count: { select: { lines: true } } },
+    }),
+    prisma.company.findMany({
+      orderBy: { code: "asc" },
+      select: { id: true, code: true, name: true, cuentaOrigen: true },
     }),
   ]);
 
@@ -40,6 +44,8 @@ export default async function ConfiguracionPage() {
           lines: c._count.lines,
         }))}
       />
+
+      <CuentasOrigenManager companies={companies} />
 
       <section className="rounded-xl border border-line bg-white p-5">
         <h2 className="text-sm font-bold uppercase tracking-wide text-brand">

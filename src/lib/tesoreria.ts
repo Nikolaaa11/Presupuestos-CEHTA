@@ -2,6 +2,8 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { requireUser, type SessionUser } from "@/lib/authz";
 
+export { esPlanillaRegistroOC, motivoNoLiberable } from "@/lib/tesoreria-core";
+
 /**
  * Circuito de pagos del fondo (mandato del directorio 29-07-2026):
  *
@@ -93,3 +95,4 @@ export const ETIQUETA_ACCION: Record<string, string> = {
   PLANILLA_IMPORTADA: "importó una planilla",
   PLANILLA_ELIMINADA: "eliminó una planilla",
 };
+

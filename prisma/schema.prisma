@@ -24,6 +24,12 @@ model Company {
   code       String      @unique // AFIS, FIP, CENERGY, CSL, RHO, DTE, EVOQUE, REVTECH, TRONGKAI, PANIMAVIDA
   name       String
   rut        String? // necesario para la nómina bancaria de transferencias
+  /**
+   * Cuenta corriente Santander desde la que la empresa paga: la columna
+   * "Cuenta origen" del formato de transferencias masivas del banco.
+   * Se configura en /configuracion; si falta, la nómina deja la celda vacía.
+   */
+  cuentaOrigen String?
   type       CompanyType
   sector     String?
   users      User[]
