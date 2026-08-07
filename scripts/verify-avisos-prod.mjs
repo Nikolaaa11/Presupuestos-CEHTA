@@ -50,7 +50,9 @@ check("Ventas con banner de editable", ventas.status === 200 && ventas.html.incl
 
 const bancos = await rho("/bancos");
 check("Bancos carga", bancos.status === 200, `status ${bancos.status}, ${bancos.html.length} bytes`);
-check("sección Avance por orden de compra", bancos.html.includes("Avance por orden de compra"));
+// La sección se renombró a «Abonos por referencia» al generalizarla de OCs
+// a cualquier factura/documento con abonos parciales.
+check("sección de abonos/avance por referencia", bancos.html.includes("Abonos por referencia"));
 // El doble conteo corregido: OC0005 debe mostrar $9.208.998, jamás $18.417.996
 check(
   "OC0005 sin doble conteo",
