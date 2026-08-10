@@ -47,3 +47,7 @@ next-env.d.ts
 /src/generated/
 
 .vercel
+
+# Excel generado por scripts/exportar-usuarios.mjs: lleva claves de acceso,
+# se regenera con un comando y no tiene por que vivir en el repo.
+Usuarios-Presupuestos-CEHTA.xlsx

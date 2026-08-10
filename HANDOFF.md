@@ -219,6 +219,7 @@ Nada se declara terminado sin verificarlo contra el server real:
 | `test-import-presupuesto.mjs` | E2E local de importación (19 checks, limpia tras sí) |
 | `qa-datos.mjs` | Invariantes de datos contra la base (11 checks) |
 | `listar-usuarios.mjs` | Las 13 cuentas entran de verdad |
+| `exportar-usuarios.mjs` | Excel de las 13 cuentas para repartir, verificando cada login contra producción antes de escribirlo (el .xlsx no se commitea: lleva claves) |
 
 Además: revisión adversarial multi-agente antes de cada deploy grande
 (encontró y corrigió 1 DoS real, doble conteo de OCs, pérdidas silenciosas de
