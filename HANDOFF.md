@@ -179,6 +179,26 @@ como cualquier otro.
   referencia» (esa pantalla se arma solo con `debit`); no se pueden cargar
   movimientos ya pagados; no hay borrado individual de movimientos.
 
+### 4-quinquies. La fila de TOTALES era liberable (2026-08-15)
+
+Las cartolas importadas traen su propia fila de **totales de la hoja**, y esa
+fila tiene débito, así que pasaba los tres filtros de `motivoNoLiberable`. En la
+base real del fondo eran dos, las dos PENDIENTES en RHO: **CC Santander por
+$1.744.717.286** y **CC BICE por $65.630.020**. El servidor las habría dejado
+entrar a un lote y la nómina habría ordenado transferirlas.
+
+La firma que las distingue: **débito Y crédito a la vez, sin referencia y sin
+fecha**. Las tres condiciones juntas hacen falta — las 98 filas del registro de
+órdenes de compra también traen las dos columnas, pero todas llevan referencia.
+Por eso `MovimientoLiberable` ahora incluye `date` y el action lo selecciona.
+
+De paso, `motivoNoLiberable` pasó de `Number()` a `Decimal`: era el último punto
+del circuito de pagos que convertía plata a float.
+
+**El conteo de la pantalla miente**: dice «Por liberar 34 · $155.774.695» sobre
+la planilla abierta, cuando en RHO el servidor solo acepta **1** movimiento
+($40.171). Se arregla en la fase de pago parcial (`specs/PROMPT-MAESTRO-PAGO-PARCIAL.md`).
+
 ## 5. Operación
 
 ```bash

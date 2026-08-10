@@ -36,6 +36,7 @@ async function cargarMovimientos(ids: string[]) {
     where: { id: { in: ids } },
     select: {
       id: true, estado: true, debit: true, credit: true, reference: true, createdById: true,
+      date: true, // la fila de totales de la planilla no tiene fecha: así se reconoce
       sheet: { select: { companyId: true, name: true } },
     },
   });

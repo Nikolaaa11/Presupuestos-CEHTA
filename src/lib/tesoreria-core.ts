@@ -11,6 +11,8 @@
  * no contar la plata dos veces en el avance, y no dejar que una fila de
  * registro se libere como si fuera un pago.
  */
+import { dec } from "./money";
+
 /**
  * Nombre visible de la planilla donde caen las cargas hechas a mano. Vive acá
  * —y no en actions.ts— porque un módulo "use server" solo puede exportar
@@ -121,6 +123,8 @@ export type MovimientoLiberable = {
   debit: { toString(): string } | null;
   credit: { toString(): string } | null;
   reference: string | null;
+  /** Necesaria para reconocer la fila de totales de la planilla (no la tiene). */
+  date?: Date | string | null;
   sheet: { name: string };
 };
 
@@ -135,13 +139,27 @@ export type MovimientoLiberable = {
  *  - Una fila de REGISTRO de orden de compra: liberarla pagaría el saldo
  *    completo de la orden de una vez, duplicando las cuotas que igual van a
  *    seguir llegando por cartola.
+ *  - La fila de TOTALES de la cartola: no es un movimiento, es la suma de la
+ *    hoja. Se cuela en la importación y hasta acá pasaba los tres filtros
+ *    anteriores porque tiene débito. En la base real son dos —CC Santander por
+ *    $1.744.717.286 y CC BICE por $65.630.020, las dos PENDIENTES— y el
+ *    servidor las habría dejado entrar a un lote.
  */
 export function motivoNoLiberable(m: MovimientoLiberable): string | null {
   const nombre = m.reference ?? "movimiento";
-  const debe = Math.abs(Number(String(m.debit ?? 0)));
-  const abona = Math.abs(Number(String(m.credit ?? 0)));
-  if (debe <= 0 && abona > 0) return `"${nombre}" es un abono recibido, no un pago a transferir`;
-  if (debe <= 0) return `"${nombre}" no tiene monto a pagar`;
+  const debe = dec(String(m.debit ?? 0)).abs();
+  const abona = dec(String(m.credit ?? 0)).abs();
+  if (debe.lte(0) && abona.gt(0)) return `"${nombre}" es un abono recibido, no un pago a transferir`;
+  if (debe.lte(0)) return `"${nombre}" no tiene monto a pagar`;
+
+  // La firma de una fila de totales: suma cargos Y abonos a la vez, y no tiene
+  // ni referencia ni fecha porque no describe una operación. Las tres
+  // condiciones juntas hacen falta — las 98 filas del registro de órdenes de
+  // compra también traen débito y crédito, pero todas llevan su referencia.
+  if (debe.gt(0) && abona.gt(0) && !m.reference && !m.date) {
+    return "esta es la fila de TOTALES de la planilla, no un pago: es la suma de la hoja. Borrala o corregila con Editar";
+  }
+
   if (esPlanillaRegistroOC(m.sheet.name)) {
     return `"${nombre}" es una línea del registro de órdenes de compra (el saldo total de la orden), no una transferencia — liberá las cuotas de la cartola`;
   }

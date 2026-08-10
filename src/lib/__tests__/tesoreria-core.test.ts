@@ -24,6 +24,43 @@ describe("planillas de registro de OC vs cartolas", () => {
   });
 });
 
+// Hallazgo real, verificado contra la base del fondo: las cartolas importadas
+// traen su propia fila de TOTALES, y esa fila tiene débito, así que pasaba los
+// tres filtros anteriores. En RHO eran dos: CC Santander por $1.744.717.286 y
+// CC BICE por $65.630.020, las dos PENDIENTES y liberables.
+describe("la fila de totales de la planilla nunca es un pago", () => {
+  const fila = (over: Partial<Parameters<typeof motivoNoLiberable>[0]> = {}) =>
+    motivoNoLiberable({
+      debit: "1744717286.00", credit: "1752402407.00",
+      reference: null, date: null, sheet: { name: "CC Santander" },
+      ...over,
+    });
+
+  it("la reconoce y la bloquea", () => {
+    expect(fila()).toContain("TOTALES");
+  });
+
+  it("hacen falta las tres señales juntas, o rompe el registro de OCs", () => {
+    // Las 98 filas del registro traen débito Y crédito igual que la de totales:
+    // lo que las distingue es que tienen referencia.
+    // Con referencia es del registro: se bloquea, pero por SU motivo.
+    expect(fila({ reference: "OC0017", sheet: { name: "Órdenes de compra RHO" } }))
+      .toContain("registro de órdenes de compra");
+    // Con fecha es un movimiento de verdad, aunque traiga las dos columnas:
+    // liberable, sin motivo ninguno.
+    expect(fila({ reference: "Proveedor X", date: new Date("2026-03-01") })).toBeNull();
+  });
+
+  it("un pago normal de cartola sigue siendo liberable", () => {
+    expect(
+      motivoNoLiberable({
+        debit: "40171.00", credit: "0", reference: "Proveedor X",
+        date: new Date("2026-03-01"), sheet: { name: "CC Santander" },
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("parsearMonto — nunca adivina, o entiende o dice por qué no", () => {
   const ok = (entrada: string, esperado: string) => {
     const r = parsearMonto(entrada);
