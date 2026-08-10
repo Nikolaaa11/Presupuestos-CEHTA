@@ -72,6 +72,11 @@ export default async function BancosPage({
         fecha: b.fecha ? fechaCorta(new Date(b.fecha)) : "—",
         descripcion: b.descripcion,
         monto: formatMoney(b.monto, "CLP"),
+        // Monto total: el saldo del documento después de esta fila. Viene
+        // calculado con Decimal desde avisos-core, que es donde vive la
+        // semántica dual de las OCs — restarlo acá contaría la plata dos veces.
+        abona: b.abona,
+        saldo: formatMoney(b.saldo, "CLP"),
         // Las filas de registro de OC no son transferencias: no tienen ni
         // necesitan datos bancarios, así que no se las advierte.
         datosBancarios:

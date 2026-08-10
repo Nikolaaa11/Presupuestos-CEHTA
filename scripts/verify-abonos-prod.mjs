@@ -44,7 +44,17 @@ const bancos = await (await fetch(`${base}/bancos?empresa=RHO`, { headers: { coo
 check("Bancos carga con la sección «Abonos por referencia»", bancos.includes("Abonos por referencia"));
 check(
   "columnas del detalle presentes",
-  ["Monto abono", "Datos bancarios"].every((c) => bancos.includes(c)),
+  ["Monto", "Abono", "Monto total", "Datos bancarios"].every((c) => bancos.includes(c)),
+);
+// La resta en pantalla: total arriba, abonos abajo, diferencia al pie.
+check(
+  "el detalle abre con el total del documento y cierra con la diferencia",
+  bancos.includes("Total del documento") && bancos.includes(">diferencia<"),
+);
+// Y lo mismo en la tabla de movimientos: el corrido con su pie.
+check(
+  "la tabla de movimientos trae el corrido y sus totales",
+  bancos.includes("Totales de lo que ves") && bancos.includes(">monto<") && bancos.includes(">abono<"),
 );
 check(
   "las categorías recurrentes ya NO arman grupo",

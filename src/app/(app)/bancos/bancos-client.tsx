@@ -54,6 +54,10 @@ export type AbonoView = {
   fecha: string;
   descripcion: string | null;
   monto: string;
+  /** Esta fila descuenta del total (plata efectivamente abonada). */
+  abona: boolean;
+  /** Saldo del documento después de esta fila — se descuenta solo. */
+  saldo: string;
   datosBancarios: string;
   estado: string;
   esRegistro: boolean;
@@ -106,16 +110,23 @@ const esAbonoDe = (m: MovementView) => !new Decimal(m.credit).abs().isZero();
 // ─────────────────────────── Fila ───────────────────────────
 
 const MovementRow = memo(function MovementRow({
-  m, seleccionado, puedeSeleccionar, puedeEditar, onSeleccionar, onEditar,
+  m, acumulado, seleccionado, puedeSeleccionar, puedeEditar, onSeleccionar, onEditar,
 }: {
   m: MovementView;
+  /** Monto total corrido hasta esta fila, ya formateado (ver `corrida`). */
+  acumulado: string;
   seleccionado: boolean;
   puedeSeleccionar: boolean;
   puedeEditar: boolean;
   onSeleccionar: (id: string, valor: boolean) => void;
   onEditar: (m: MovementView) => void;
 }) {
-  const esAbono = Number(m.credit) !== 0;
+  // Cada columna muestra SU propio valor. Las filas del registro de órdenes de
+  // compra traen las dos cosas a la vez (débito = saldo por pagar, crédito =
+  // lo ya abonado): decidir "es abono o es egreso" escondía uno de los dos
+  // detrás de un guion, y entonces la columna no sumaba lo que dice su pie.
+  const tieneMonto = !new Decimal(m.debit).isZero();
+  const tieneAbono = !new Decimal(m.credit).isZero();
   return (
     <tr className={`border-b border-line/70 align-top ${seleccionado ? "bg-lavender-bg/40" : "hover:bg-soft/60"}`}>
       <td className="px-3 py-2.5">
@@ -140,8 +151,17 @@ const MovementRow = memo(function MovementRow({
           <p className="mt-0.5 text-xs text-ink-soft">{[m.categoryGeneral, m.businessCenter].filter(Boolean).join(" · ")}</p>
         )}
       </td>
-      <td className={`cell-num whitespace-nowrap px-3 py-2.5 text-sm font-semibold ${esAbono ? "text-ok" : "text-ink"}`}>
-        {esAbono ? "+" : ""}{formatCell(esAbono ? m.credit : m.debit) || "0"}
+      {/* Monto (egreso) · Abono (ingreso) · Monto total (el corrido) */}
+      <td className="cell-num whitespace-nowrap px-3 py-2.5 text-sm font-semibold text-ink">
+        {tieneMonto ? formatCell(m.debit) : <span className="font-normal text-ink-soft">—</span>}
+      </td>
+      <td className="cell-num whitespace-nowrap px-3 py-2.5 text-sm font-semibold text-ok">
+        {/* "+" porque en la cartola un abono es plata que ENTRA. Que además
+            descuente del corrido lo dice el encabezado, no el signo. */}
+        {tieneAbono ? `+ ${formatCell(m.credit)}` : <span className="font-normal text-ink-soft">—</span>}
+      </td>
+      <td className="cell-num whitespace-nowrap bg-soft/50 px-3 py-2.5 text-sm font-semibold text-ink">
+        {acumulado}
       </td>
       <td className="max-w-44 px-3 py-2.5 text-xs text-ink-soft">
         {m.bankName && <p className="truncate">{m.bankName}</p>}
@@ -243,6 +263,26 @@ export function BancosClient({
         .some((v) => v?.toLowerCase().includes(q));
     });
   }, [movements, filtro, busqueda]);
+
+  /**
+   * Monto · Abono · Monto total de la tabla de movimientos: el corrido suma
+   * los montos y descuenta los abonos fila a fila, y el pie cierra con la
+   * resta. Se calcula sobre `visibles` (no sobre todos los movimientos) a
+   * propósito: si hay un filtro puesto, lo que se ve y lo que suma tienen que
+   * ser lo mismo — un total que incluyera filas ocultas no cuadraría con la
+   * columna. Decimal, jamás aritmética float sobre montos.
+   */
+  const corrida = useMemo(() => {
+    const acumulado = new Map<string, string>();
+    let montos = new Decimal(0);
+    let abonos = new Decimal(0);
+    for (const m of visibles) {
+      montos = montos.plus(new Decimal(m.debit).abs());
+      abonos = abonos.plus(new Decimal(m.credit).abs());
+      acumulado.set(m.id, formatCell(montos.minus(abonos)) || "0");
+    }
+    return { acumulado, montos, abonos, diferencia: montos.minus(abonos) };
+  }, [visibles]);
 
   const seleccionables = visibles.filter((m) => m.estado === "PENDIENTE");
   const totalSeleccionado = useMemo(
@@ -383,17 +423,39 @@ export function BancosClient({
                     </div>
                   </summary>
                   <div className="overflow-x-auto border-t border-line/70 bg-soft/40 px-5 py-3">
+                    {/* Monto · Abono · Monto total, igual que el Excel del
+                        banco: el total del documento arriba, los abonos abajo
+                        y el saldo descontándose fila a fila hasta la
+                        diferencia del pie. */}
                     <table className="w-full border-collapse text-xs">
                       <thead className="text-left uppercase tracking-wide text-ink-soft">
                         <tr>
                           <th className="py-1.5 pr-4">Fecha</th>
                           <th className="py-1.5 pr-4">Descripción</th>
-                          <th className="py-1.5 pr-4 text-right">Monto abono</th>
+                          <th className="py-1.5 pr-4 text-right">Monto</th>
+                          <th className="py-1.5 pr-4 text-right">Abono</th>
+                          <th className="py-1.5 pr-4 text-right" title="Lo que queda por abonar después de esta fila">
+                            Monto total
+                          </th>
                           <th className="py-1.5 pr-4">Datos bancarios</th>
                           <th className="py-1.5">Estado</th>
                         </tr>
                       </thead>
                       <tbody>
+                        <tr className="border-t border-line/60 bg-white/70">
+                          <td className="py-1.5 pr-4 font-semibold text-ink" colSpan={2}>
+                            Total del documento
+                          </td>
+                          <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold text-ink">
+                            {g.total}
+                          </td>
+                          <td className="py-1.5 pr-4 text-right text-ink-soft">—</td>
+                          <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold text-ink">
+                            {g.total}
+                          </td>
+                          <td className="py-1.5 pr-4" />
+                          <td className="py-1.5" />
+                        </tr>
                         {g.abonos.map((b) => (
                           <tr key={b.id} className="border-t border-line/60">
                             <td className="whitespace-nowrap py-1.5 pr-4 text-ink">{b.fecha}</td>
@@ -405,8 +467,17 @@ export function BancosClient({
                                 </span>
                               )}
                             </td>
-                            <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold text-ink">
+                            <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right text-ink">
                               {b.monto}
+                            </td>
+                            {/* Solo las filas que descuentan van a la columna
+                                Abono: una fila PENDIENTE todavía no se pagó, y
+                                la del registro declara el total, no lo abona. */}
+                            <td className={`cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold ${b.abona ? "text-ok" : "text-ink-soft"}`}>
+                              {b.abona ? `− ${b.monto}` : "—"}
+                            </td>
+                            <td className="cell-num whitespace-nowrap py-1.5 pr-4 text-right font-semibold text-ink">
+                              {b.saldo}
                             </td>
                             <td className="py-1.5 pr-4 text-ink-soft">{b.datosBancarios}</td>
                             <td className="whitespace-nowrap py-1.5">
@@ -417,6 +488,27 @@ export function BancosClient({
                           </tr>
                         ))}
                       </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-line">
+                          <td className="py-2 pr-4 font-bold uppercase tracking-wide text-ink" colSpan={2}>
+                            Totales
+                          </td>
+                          <td className="cell-num whitespace-nowrap py-2 pr-4 text-right font-bold text-ink">
+                            {g.total}
+                            <span className="block text-[10px] font-normal uppercase text-ink-soft">total</span>
+                          </td>
+                          <td className="cell-num whitespace-nowrap py-2 pr-4 text-right font-bold text-ok">
+                            {g.abonado}
+                            <span className="block text-[10px] font-normal uppercase text-ink-soft">abonado</span>
+                          </td>
+                          <td className={`cell-num whitespace-nowrap py-2 pr-4 text-right font-bold ${g.completa ? "text-ok" : "text-warn"}`}>
+                            {g.diferencia}
+                            <span className="block text-[10px] font-normal uppercase text-ink-soft">diferencia</span>
+                          </td>
+                          <td className="py-2 pr-4" />
+                          <td className="py-2" />
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </details>
@@ -610,7 +702,11 @@ export function BancosClient({
                     <th className="border-b border-line px-3 py-3">Fecha</th>
                     <th className="border-b border-line px-3 py-3">Referencia</th>
                     <th className="border-b border-line px-3 py-3">Descripción</th>
-                    <th className="border-b border-line px-3 py-3 text-right">Monto</th>
+                    <th className="border-b border-line px-3 py-3 text-right" title="Egreso: lo que hay que pagar">Monto</th>
+                    <th className="border-b border-line px-3 py-3 text-right" title="Ingreso: lo que se abonó">Abono</th>
+                    <th className="border-b border-line px-3 py-3 text-right" title="Corrido: suma los montos y descuenta los abonos, en el orden que ves">
+                      Monto total
+                    </th>
                     <th className="border-b border-line px-3 py-3">Datos bancarios</th>
                     <th className="border-b border-line px-3 py-3">Estado</th>
                     <th className="border-b border-line px-3 py-3" />
@@ -618,14 +714,38 @@ export function BancosClient({
                 </thead>
                 <tbody>
                   {visibles.length === 0 && (
-                    <tr><td colSpan={8} className="px-6 py-10 text-center text-sm text-ink-soft">Sin movimientos con este filtro</td></tr>
+                    <tr><td colSpan={10} className="px-6 py-10 text-center text-sm text-ink-soft">Sin movimientos con este filtro</td></tr>
                   )}
                   {visibles.map((m) => (
-                    <MovementRow key={m.id} m={m} seleccionado={seleccion.has(m.id)}
+                    <MovementRow key={m.id} m={m} acumulado={corrida.acumulado.get(m.id) ?? "0"}
+                      seleccionado={seleccion.has(m.id)}
                       puedeSeleccionar={permisos.libera} puedeEditar={permisos.edita}
                       onSeleccionar={onSeleccionar} onEditar={setEditando} />
                   ))}
                 </tbody>
+                {visibles.length > 0 && (
+                  <tfoot className="bg-soft">
+                    <tr>
+                      <td className="border-t-2 border-line px-3 py-3" />
+                      <td className="border-t-2 border-line px-3 py-3 text-xs font-bold uppercase tracking-wide text-ink" colSpan={3}>
+                        Totales de lo que ves
+                      </td>
+                      <td className="cell-num whitespace-nowrap border-t-2 border-line px-3 py-3 text-sm font-bold text-ink">
+                        {formatCell(corrida.montos) || "0"}
+                        <span className="block text-[10px] font-normal uppercase text-ink-soft">monto</span>
+                      </td>
+                      <td className="cell-num whitespace-nowrap border-t-2 border-line px-3 py-3 text-sm font-bold text-ok">
+                        {formatCell(corrida.abonos) || "0"}
+                        <span className="block text-[10px] font-normal uppercase text-ink-soft">abono</span>
+                      </td>
+                      <td className={`cell-num whitespace-nowrap border-t-2 border-line px-3 py-3 text-sm font-bold ${corrida.diferencia.isNegative() ? "text-ok" : "text-ink"}`}>
+                        {formatCell(corrida.diferencia) || "0"}
+                        <span className="block text-[10px] font-normal uppercase text-ink-soft">diferencia</span>
+                      </td>
+                      <td className="border-t-2 border-line px-3 py-3" colSpan={3} />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
             <p className="border-t border-line px-4 py-2 text-xs text-ink-soft">

@@ -230,6 +230,86 @@ describe("abonos por referencia (caso real Resintech: factura en 4 abonos)", () 
     expect(grupos[0].excedente).toBe("0.00");
   });
 
+  // ── Monto · Abono · Monto total: la columna que se descuenta sola ──
+  // El invariante que sostiene la pantalla: el saldo de la ÚLTIMA fila tiene
+  // que ser exactamente la Diferencia del encabezado. Si no, la tabla se
+  // contradice a sí misma delante de quien firma la transferencia.
+
+  it("el saldo se descuenta fila a fila y cierra en la diferencia", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const [g] = agruparAbonosPorReferencia([
+      abono({ id: "a1", date: new Date("2026-07-01") }),
+      abono({ id: "a2", date: new Date("2026-07-08") }),
+      abono({ id: "a3", date: new Date("2026-07-15") }),
+      abono({ id: "a4", debit: "484578", estado: "PENDIENTE", date: new Date("2026-07-22") }),
+    ]);
+    expect(g.abonos.map((b) => b.saldo)).toEqual([
+      "10484578.00", // 15.484.578 − 5.000.000
+      "5484578.00",
+      "484578.00",
+      "484578.00", // la fila PENDIENTE todavía no abona: el saldo no se mueve
+    ]);
+    expect(g.abonos.map((b) => b.abona)).toEqual([true, true, true, false]);
+    expect(g.abonos.at(-1)!.saldo).toBe(g.pendiente);
+  });
+
+  // Sin esto la fila del registro y las cartolas descontarían la MISMA plata:
+  // el saldo terminaría en −9.208.998 en una orden que está saldada.
+  it("la fila del registro declara el total, no lo abona", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const [g] = agruparAbonosPorReferencia([
+      abono({ reference: "OC0005", id: "reg", esRegistroOC: true, debit: "9208998" }),
+      abono({ reference: "OC0005", id: "p1", debit: "4604499" }),
+      abono({ reference: "OC0005", id: "p2", debit: "4604499" }),
+    ]);
+    expect(g.abonos.map((b) => b.abona)).toEqual([false, true, true]);
+    expect(g.abonos.map((b) => b.saldo)).toEqual(["9208998.00", "4604499.00", "0.00"]);
+    expect(g.abonos.at(-1)!.saldo).toBe(g.pendiente);
+  });
+
+  // OC0017: contrato en cuotas. El registro PENDIENTE declara el SALDO, y las
+  // cuotas ya pagadas viven en la cartola.
+  it("un contrato en cuotas cierra en el saldo que declara el registro", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const cuotas = Array.from({ length: 16 }, (_, i) =>
+      abono({ reference: "OC0017", id: `c${i}`, debit: "1500000", date: new Date(2026, 0, i + 1) }),
+    );
+    const [g] = agruparAbonosPorReferencia([
+      ...cuotas,
+      abono({ reference: "OC0017", id: "reg", esRegistroOC: true, debit: "21000000", estado: "PENDIENTE" }),
+    ]);
+    expect(g.total).toBe("45000000.00");
+    expect(g.abonos.at(-1)!.saldo).toBe(g.pendiente);
+    expect(g.pendiente).toBe("21000000.00");
+  });
+
+  // Sin cartolas importadas manda el propio registro: si ahí no abonara nadie,
+  // el saldo se quedaría en el total y la orden pagada parecería impaga.
+  it("sin cartolas, el registro pagado es el que abona", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const [g] = agruparAbonosPorReferencia([
+      abono({ reference: "OC0092", id: "reg", esRegistroOC: true, debit: "3000000" }),
+      abono({ reference: "OC0092", id: "pend", esRegistroOC: true, debit: "1000000", estado: "PENDIENTE" }),
+    ]);
+    expect(g.abonos.map((b) => b.abona)).toEqual([true, false]);
+    expect(g.abonos.at(-1)!.saldo).toBe(g.pendiente);
+  });
+
+  // A propósito: con sobrepago el total NO se estira, así que el saldo cruza a
+  // negativo justo en la fila duplicada — que es la que hay que ir a mirar.
+  it("con sobrepago el saldo queda negativo y señala la fila culpable", async () => {
+    const { agruparAbonosPorReferencia } = await import("../avisos-core");
+    const [g] = agruparAbonosPorReferencia([
+      abono({ reference: "OC0005", id: "reg", esRegistroOC: true, debit: "9208998" }),
+      abono({ reference: "OC0005", id: "p1", debit: "4604499" }),
+      abono({ reference: "OC0005", id: "p2", debit: "4604499" }),
+      abono({ reference: "OC0005", id: "dup", debit: "4604499" }),
+    ]);
+    expect(g.sobrepagado).toBe(true);
+    expect(g.abonos.at(-1)!.saldo).toBe("-4604499.00");
+    expect(g.abonos.at(-1)!.saldo).toBe(`-${g.excedente}`);
+  });
+
   it("los grupos con saldo pendiente van primero (mayor diferencia arriba)", async () => {
     const { agruparAbonosPorReferencia } = await import("../avisos-core");
     const grupos = agruparAbonosPorReferencia([

@@ -55,6 +55,10 @@ export type AbonoDetalle = {
   cuenta: string | null;
   estado: string;
   esRegistro: boolean;
+  /** Esta fila descuenta del total (plata efectivamente abonada). */
+  abona: boolean;
+  /** Saldo del documento DESPUÉS de esta fila — la resta que se ve en pantalla. */
+  saldo: string;
 };
 
 /** Avance de una orden de compra: total, cuánto va pagado y qué falta. */
@@ -139,6 +143,12 @@ export type AvisoCapex = {
 type MovFlexible = MovimientoParaAgrupar &
   Partial<Pick<MovimientoAbono, "id" | "description" | "rut" | "bankName" | "accountNumber">>;
 
+/**
+ * La fila tal como sale del recorrido: todavía no sabe si descuenta ni cuál es
+ * el saldo, porque eso depende del grupo entero (ver `conSaldoCorriente`).
+ */
+type FilaCruda = Omit<AbonoDetalle, "abona" | "saldo">;
+
 type Acumulado = {
   companyCode: string;
   companyName: string;
@@ -150,7 +160,7 @@ type Acumulado = {
   tieneRegistro: boolean;
   fechasPendientes: number[];
   n: number;
-  abonos: AbonoDetalle[];
+  abonos: FilaCruda[];
 };
 
 /** Acumulación compartida: la ÚNICA implementación de la semántica dual. */
@@ -261,6 +271,31 @@ function aAvance(g: Acumulado): AvanceOC {
   };
 }
 
+/**
+ * La columna "Monto total" de la pantalla: el saldo del documento DESPUÉS de
+ * cada fila, en el orden en que se muestran. Total menos lo que se va abonando.
+ *
+ * Solo descuentan las filas cuya plata YA está dentro de `avanzado`, y esa es
+ * UNA sola fuente — `aAvance` usa `max(cartola, registro)`, no la suma, porque
+ * en una OC cerrada ambas fuentes son la misma plata. Descontar las dos
+ * restaría dos veces y el saldo final no calzaría con la Diferencia del
+ * encabezado, que es justamente lo que esta columna tiene que explicar.
+ *
+ * Invariante (sin sobrepago): el saldo de la última fila === `pendiente`.
+ * Con sobrepago el saldo termina NEGATIVO a propósito: el total se queda en lo
+ * declarado y la fila donde el saldo cruza a negativo es la que hay que ir a
+ * mirar (típicamente un duplicado por re-importación).
+ */
+function conSaldoCorriente(g: Acumulado, avance: AvanceOC, filas: FilaCruda[]): AbonoDetalle[] {
+  const descuentaElRegistro = g.registroPagado.gt(g.cartolaPagada);
+  let saldo = dec(avance.total);
+  return filas.map((f) => {
+    const abona = f.estado !== "PENDIENTE" && f.esRegistro === descuentaElRegistro;
+    if (abona) saldo = saldo.minus(dec(f.monto));
+    return { ...f, abona, saldo: saldo.toFixed(2) };
+  });
+}
+
 export function agruparAvancesOC(movimientos: MovimientoParaAgrupar[]): AvanceOC[] {
   const avances = acumularPorReferencia(movimientos, (ref) => PATRON_OC.test(ref)).map(aAvance);
   // Las más atrasadas primero; las sin fecha al final, ordenadas por referencia.
@@ -293,15 +328,18 @@ const PARECE_DOCUMENTO = /\d/;
 export function agruparAbonosPorReferencia(movimientos: MovimientoAbono[]): GrupoAbonos[] {
   return acumularPorReferencia(movimientos, null)
     .filter((g) => (g.tieneRegistro || g.n >= 2) && PARECE_DOCUMENTO.test(g.referencia))
-    .map((g) => ({
-      ...aAvance(g),
-      abonos: [...g.abonos].sort((a, b) => {
+    .map((g) => {
+      const avance = aAvance(g);
+      // El saldo se calcula DESPUÉS de ordenar: la columna tiene que descontar
+      // en el mismo orden en que se lee la tabla.
+      const filas = [...g.abonos].sort((a, b) => {
         if (a.fecha && b.fecha) return a.fecha.localeCompare(b.fecha);
         if (a.fecha) return -1;
         if (b.fecha) return 1;
         return 0;
-      }),
-    }))
+      });
+      return { ...avance, abonos: conSaldoCorriente(g, avance, filas) };
+    })
     .sort((a, b) => {
       // Con saldo pendiente primero (mayor diferencia arriba); después completas.
       const pa = dec(a.pendiente);

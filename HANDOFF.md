@@ -105,6 +105,31 @@ Pagos:       PENDIENTE ─libera→ LIBERADO ─comprobante→ EN_TRANSFERENCIA 
   (típico duplicado por re-importación), no se estira el total — se marca
   "pagado de más" para que alguien lo revise.
 
+### 4-ter. Monto · Abono · Monto total (2026-08-15)
+
+Las dos tablas de Bancos muestran las tres columnas con la resta al lado y la
+suma abajo:
+
+- **Detalle de cada referencia**: primera fila «Total del documento», después
+  cada abono descontando, y el pie con Total / Abonado / Diferencia. El saldo
+  fila a fila NO se calcula en la UI: viene de `conSaldoCorriente`
+  (`avisos-core.ts`), donde vive la semántica dual de las OCs. Solo descuenta
+  la fuente que manda en `avanzado` (`max(cartola, registro)`, no la suma) —
+  descontar las dos restaría la misma plata dos veces. **Invariante testeado**:
+  el saldo de la última fila === `pendiente` del grupo. Con sobrepago termina
+  negativo a propósito: la fila donde cruza a cero es la duplicada.
+- **Tabla de movimientos**: el corrido SÍ se calcula en el cliente (con
+  Decimal), porque depende del filtro puesto — el pie tiene que cerrar con lo
+  que se ve, no con filas ocultas.
+- **Cada columna muestra su propio valor.** Las filas del registro de OCs traen
+  débito Y crédito a la vez (saldo por pagar + lo ya abonado). El código viejo
+  elegía uno (`esAbono ? credit : debit`) y escondía el otro; con una sola
+  columna era invisible, con tres y un total la columna dejaba de sumar. Un
+  total visible obliga a la columna a ser honesta.
+- Los montos con centavos (7 de 1.098) hacen que la columna sumada a ojo pueda
+  diferir en $1 del pie: el pie suma los Decimal exactos y redondea una sola
+  vez. Es lo correcto — jamás redondear a mitad de cálculo.
+
 ## 5. Operación
 
 ```bash
