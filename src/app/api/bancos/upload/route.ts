@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { parseWorkbook, movementFingerprint, type CellValue } from "@/lib/bank-import";
 import { revisarZip } from "@/lib/zip-safety";
+import { PLANILLA_MANUAL } from "@/lib/tesoreria-core";
 
 /**
  * Subida de planillas bancarias (módulo Bancos).
@@ -118,6 +119,22 @@ export async function POST(request: Request) {
 
   const { parsed } = parseWorkbook(aoa);
 
+  // El reemplazo de planillas se dedupe por NOMBRE (ver el deleteMany más
+  // abajo). Una hoja llamada como la planilla de cargas manuales se llevaría en
+  // cascada todo lo cargado a mano —y sus eventos— devolviendo {ok:true}: nadie
+  // vería el error. Y es justo lo único que no se puede volver a importar.
+  const colision = parsed.find(
+    (p) => p.name.trim().toLowerCase() === PLANILLA_MANUAL.toLowerCase(),
+  );
+  if (colision) {
+    return Response.json(
+      {
+        error: `«${PLANILLA_MANUAL}» es el nombre que usa la plataforma para los movimientos cargados a mano. Renombrá esa hoja en el Excel antes de subirla.`,
+      },
+      { status: 422 },
+    );
+  }
+
   if (parsed.length === 0) {
     return Response.json(
       { error: "Ninguna hoja tiene el formato esperado (encabezados con Fecha/Monto/Abonos/Egreso)" },
@@ -200,7 +217,11 @@ export async function POST(request: Request) {
 
     // Atómico: si algo falla, la planilla anterior queda intacta.
     await prisma.$transaction(async (tx) => {
-      await tx.bankSheet.deleteMany({ where: { companyId: company.id, name: sheet.name } });
+      // `manual: false` es defensa en profundidad: aunque el nombre calzara por
+      // cualquier camino, una importación nunca borra las cargas manuales.
+      await tx.bankSheet.deleteMany({
+        where: { companyId: company.id, name: sheet.name, manual: false },
+      });
       const dbSheet = await tx.bankSheet.create({
         data: {
           companyId: company.id,

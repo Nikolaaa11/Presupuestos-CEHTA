@@ -27,6 +27,9 @@ if (!url || url.includes("127.0.0.1") || url.startsWith("postgres://placeholder"
 }
 
 const client = new pg.Client({ connectionString: url });
+// Sin este listener, un RAISE WARNING o RAISE NOTICE de una migración se pierde:
+// el log del build muestra un ✓ y nadie se entera de que algo se omitió.
+client.on("notice", (n) => console.log(`db-deploy: [${n.severity}] ${n.message}`));
 await client.connect();
 
 /**

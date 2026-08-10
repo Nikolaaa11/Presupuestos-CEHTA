@@ -94,10 +94,13 @@ export default async function BancosPage({
     id: s.id,
     name: s.name,
     sourceFile: s.sourceFile,
-    uploadedBy: s.uploadedBy?.name ?? "importación",
+    // La planilla manual no tiene un "quien la subió": la autoría real es de
+    // cada fila (createdById) y de la bitácora.
+    uploadedBy: s.manual ? "carga manual" : s.uploadedBy?.name ?? "importación",
     createdAt: fechaCorta(s.createdAt),
     total: s._count.movements,
     pending: pendingBySheet.get(s.id) ?? 0,
+    manual: s.manual,
   }));
 
   // Se abre la planilla con más pagos pendientes: es lo que tesorería mira primero.
@@ -109,7 +112,11 @@ export default async function BancosPage({
   if (selectedSheetId) {
     const rows = await prisma.bankMovement.findMany({
       where: { sheetId: selectedSheetId },
-      orderBy: { rowIndex: "asc" },
+      // Desempate explícito: `rowIndex` se calcula como max+1 y dos altas
+      // simultáneas pueden empatar. Sin desempate el orden lo elegía Postgres, y
+      // la columna «Monto total» es un acumulado SOBRE ESE ORDEN — la misma
+      // pantalla mostraba saldos distintos entre recargas.
+      orderBy: [{ rowIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       include: { batch: { select: { number: true } } },
     });
     movements = rows.map((m) => ({
@@ -129,6 +136,10 @@ export default async function BancosPage({
       email: m.email,
       estado: m.estado,
       lote: m.batch ? `LOTE-${String(m.batch.number).padStart(3, "0")}` : null,
+      // Lo cargó quien está mirando: el servidor no se lo va a dejar liberar
+      // (cuatro ojos), así que tampoco se ofrece para seleccionar — si entrara
+      // en un "seleccionar todos", el lote entero se rechazaría por esta fila.
+      esPropio: m.createdById === user.id,
     }));
   }
 

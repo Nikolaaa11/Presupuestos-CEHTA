@@ -11,12 +11,16 @@ import {
   marcarTransferida,
   revertirTransferencia,
   editarMovimiento,
+  agregarMovimiento,
   deleteSheet,
+  type Duplicado,
 } from "./actions";
 
 export type SheetView = {
   id: string; name: string; sourceFile: string; uploadedBy: string;
   createdAt: string; total: number; pending: number;
+  /** Planilla de cargas hechas a mano: no se importa ni se puede eliminar. */
+  manual: boolean;
 };
 
 export type MovementView = {
@@ -36,6 +40,8 @@ export type MovementView = {
   email: string | null;
   estado: string;
   lote: string | null;
+  /** Lo cargó a mano quien está mirando: no puede liberarlo (cuatro ojos). */
+  esPropio: boolean;
 };
 
 export type LoteView = {
@@ -130,7 +136,7 @@ const MovementRow = memo(function MovementRow({
   return (
     <tr className={`border-b border-line/70 align-top ${seleccionado ? "bg-lavender-bg/40" : "hover:bg-soft/60"}`}>
       <td className="px-3 py-2.5">
-        {puedeSeleccionar && m.estado === "PENDIENTE" ? (
+        {puedeSeleccionar && m.estado === "PENDIENTE" && !esAbonoDe(m) && !m.esPropio ? (
           <input
             type="checkbox"
             checked={seleccionado}
@@ -138,6 +144,10 @@ const MovementRow = memo(function MovementRow({
             aria-label={`Seleccionar ${m.reference ?? "movimiento"}`}
             className="h-4 w-4 accent-brand"
           />
+        ) : puedeSeleccionar && m.estado === "PENDIENTE" && m.esPropio ? (
+          <span className="text-xs text-ink-soft" title="Lo cargaste vos: la liberación la firma otra persona">
+            —
+          </span>
         ) : null}
       </td>
       <td className="whitespace-nowrap px-3 py-2.5 text-sm text-ink">{fmtFecha(m.date ?? m.entryDate)}</td>
@@ -229,6 +239,7 @@ export function BancosClient({
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [editando, setEditando] = useState<MovementView | null>(null);
+  const [agregando, setAgregando] = useState(false);
   const [verBitacora, setVerBitacora] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
   const [, startTransition] = useTransition();
@@ -284,7 +295,15 @@ export function BancosClient({
     return { acumulado, montos, abonos, diferencia: montos.minus(abonos) };
   }, [visibles]);
 
-  const seleccionables = visibles.filter((m) => m.estado === "PENDIENTE");
+  /**
+   * Solo lo que el circuito puede liberar de verdad. Antes era "todo lo
+   * PENDIENTE visible", y con el botón de tildar todos eso incluía los abonos
+   * recibidos: el server action rechaza el lote entero al toparse con el
+   * primero, así que un solo abono impedía liberar los 20 pagos legítimos.
+   */
+  const seleccionables = visibles.filter(
+    (m) => m.estado === "PENDIENTE" && !esAbonoDe(m) && !m.esPropio,
+  );
   const totalSeleccionado = useMemo(
     () => movements.filter((m) => seleccion.has(m.id)).reduce((a, m) => a.plus(montoDe(m)), new Decimal(0)),
     [movements, seleccion],
@@ -358,6 +377,15 @@ export function BancosClient({
           className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-deep disabled:opacity-60">
           {subiendo ? "Procesando…" : `Subir a ${companyCode}`}
         </button>
+        {/* Vive en esta tarjeta, que es lo único que se renderiza SIEMPRE: el
+            resto de la pantalla está detrás de "si hay planillas", y sin
+            planilla es justamente cuando más falta hace poder cargar algo. */}
+        {permisos.edita && (
+          <button type="button" onClick={() => setAgregando(true)}
+            className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-lavender-bg">
+            + Agregar movimiento
+          </button>
+        )}
         <a href={`/api/bancos/nomina?empresa=${companyCode}`} download
           className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-lavender-bg">
           Descargar Excel
@@ -609,7 +637,16 @@ export function BancosClient({
 
       {sheets.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line bg-white p-10 text-center">
-          <p className="text-sm text-ink-soft">No hay planillas cargadas. Subí la primera con el formulario de arriba.</p>
+          <p className="text-sm text-ink-soft">
+            No hay planillas cargadas. Subí la primera con el formulario de arriba
+            {permisos.edita ? ", o cargá un movimiento suelto a mano." : "."}
+          </p>
+          {permisos.edita && (
+            <button type="button" onClick={() => setAgregando(true)}
+              className="mt-4 rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-deep">
+              + Agregar movimiento
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -753,11 +790,17 @@ export function BancosClient({
             </p>
           </section>
 
-          {permisos.edita && selectedSheetId && (
+          {/* La planilla de cargas manuales no se ofrece para borrar: una
+              cartola se vuelve a subir, lo cargado a mano no está en ningún
+              lado. El server action también lo rechaza. */}
+          {permisos.edita && selectedSheetId && !sheets.find((s) => s.id === selectedSheetId)?.manual && (
             <div className="flex justify-end">
               <button type="button"
                 onClick={() => {
-                  if (!window.confirm("¿Eliminar esta planilla completa con todos sus movimientos?")) return;
+                  const hoja = sheets.find((s) => s.id === selectedSheetId);
+                  if (!window.confirm(
+                    `¿Eliminar «${hoja?.name}» con sus ${hoja?.total ?? 0} movimientos? Se puede volver a subir el Excel, pero se pierde lo liberado y lo editado a mano.`,
+                  )) return;
                   correr(() => deleteSheet(selectedSheetId), "Planilla eliminada");
                 }}
                 className="rounded-lg px-3 py-1.5 text-xs font-medium text-ink-soft hover:bg-danger-bg hover:text-danger">
@@ -766,6 +809,30 @@ export function BancosClient({
             </div>
           )}
         </>
+      )}
+
+      {agregando && (
+        <AltaMovimiento
+          companyCode={companyCode}
+          onCerrar={() => setAgregando(false)}
+          onListo={(sheetId) => {
+            setAgregando(false);
+            setAviso("Movimiento agregado — quedó pendiente, lo libera otra persona");
+            // El filtro y la búsqueda son estado del cliente y sobreviven a la
+            // navegación (misma ruta, el componente no se desmonta). Si había
+            // uno puesto —«liberados», por ejemplo—, el movimiento nuevo nace
+            // PENDIENTE, no pasa el filtro, y la tabla queda vacía justo
+            // después de decir «Movimiento agregado».
+            setFiltro("todos");
+            setBusqueda("");
+            // Navegar a la planilla de cargas manuales, no solo refrescar: la
+            // tabla muestra UNA planilla por vez y el alta va a otra. Sin esto
+            // el usuario guardaba, no veía nada, y lo cargaba de nuevo — el
+            // duplicado lo generaba la propia navegación.
+            if (sheetId !== selectedSheetId) irAPlanilla(sheetId);
+            else router.refresh();
+          }}
+        />
       )}
 
       {editando && (
@@ -778,6 +845,180 @@ export function BancosClient({
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────── Alta manual ───────────────────────────
+
+/**
+ * Diálogo para cargar un movimiento que no vino en ninguna cartola.
+ *
+ * No reusa `EditorMovimiento` a propósito: aquel recibe un movimiento existente
+ * y expone egreso y abono como dos campos libres a la vez (así viene el registro
+ * de OCs). En una carga a mano eso es una trampa — un movimiento con las dos
+ * cosas no se sabe si se paga o se cobra —, así que acá se elige el tipo y hay
+ * un solo campo de monto.
+ */
+function AltaMovimiento({
+  companyCode, onCerrar, onListo,
+}: {
+  companyCode: string;
+  onCerrar: () => void;
+  onListo: (sheetId: string) => void;
+}) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const [f, setF] = useState({
+    tipo: "" as "" | "EGRESO" | "ABONO",
+    monto: "", date: hoy, reference: "", description: "",
+    rut: "", bankName: "", accountType: "", accountNumber: "", email: "",
+    categoryGeneral: "", businessCenter: "",
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [duplicados, setDuplicados] = useState<Duplicado[] | null>(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const campo = "w-full rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-brand";
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setF({ ...f, [k]: e.target.value });
+    // Si cambia algo, el "confirmar duplicado" deja de aplicar: es otro
+    // movimiento. Se limpia también el error, o queda un cartel rojo hablando
+    // de una lista de parecidos que ya no está en pantalla.
+    setDuplicados(null);
+    setError(null);
+  };
+
+  const esEgreso = f.tipo === "EGRESO";
+  const faltanBancarios = esEgreso
+    ? [!f.rut.trim() && "RUT", !f.bankName.trim() && "banco", !f.accountNumber.trim() && "cuenta"]
+        .filter(Boolean).join(", ")
+    : "";
+
+  async function guardar(confirmando: boolean) {
+    setGuardando(true);
+    setError(null);
+    try {
+      const r = await agregarMovimiento({ ...f, companyCode, confirmarDuplicado: confirmando });
+      if (r.ok) { onListo(r.sheetId); return; }
+      setError(r.error);
+      setDuplicados(r.duplicados ?? null);
+    } catch {
+      // Sin este catch, si se cae la conexión el botón queda en «Agregando…»
+      // para siempre y sin mensaje: la persona no sabe si se guardó, lo carga
+      // de nuevo, y crea justo el duplicado que esta pantalla trata de evitar.
+      setError(
+        "No se pudo conectar con el servidor. Antes de reintentar, mirá la planilla «Cargas manuales»: puede que el movimiento igual se haya guardado.",
+      );
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" role="dialog" aria-modal="true"
+      aria-label="Agregar movimiento">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+        <h2 className="text-lg font-bold text-ink">Agregar movimiento a {companyCode}</h2>
+        <p className="mt-1 text-sm text-ink-soft">
+          Para lo que no vino en una cartola: una factura suelta, un pago que todavía no aparece en el
+          banco o un abono que entró. Queda <strong>pendiente</strong> y entra al circuito como cualquier
+          otro — lo libera otra persona, no vos.
+        </p>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <fieldset className="md:col-span-3">
+            <legend className="text-xs text-ink-soft">¿Qué es?</legend>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {([["EGRESO", "Egreso a pagar"], ["ABONO", "Abono recibido"]] as const).map(([v, texto]) => (
+                <button key={v} type="button" onClick={() => { setF({ ...f, tipo: v }); setDuplicados(null); }}
+                  aria-pressed={f.tipo === v}
+                  className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                    f.tipo === v ? "border-brand bg-lavender-bg text-brand" : "border-line text-ink-soft hover:bg-soft"}`}>
+                  {texto}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Monto</span>
+            <input value={f.monto} onChange={set("monto")} inputMode="decimal" placeholder="1.500.000"
+              className={`${campo} cell-num`} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Fecha</span>
+            <input type="date" value={f.date} onChange={set("date")} className={campo} /></label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-ink-soft">
+              {esEgreso ? "A quién se le paga" : "De quién viene"}
+              {esEgreso && <span className="text-danger"> *</span>}
+            </span>
+            <input value={f.reference} onChange={set("reference")} placeholder="Proveedor o N° de documento"
+              className={campo} /></label>
+
+          <label className="flex flex-col gap-1 md:col-span-3"><span className="text-xs text-ink-soft">Descripción</span>
+            <input value={f.description} onChange={set("description")} className={campo} /></label>
+
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">RUT</span>
+            <input value={f.rut} onChange={set("rut")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Banco</span>
+            <input value={f.bankName} onChange={set("bankName")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Tipo de cuenta</span>
+            <input value={f.accountType} onChange={set("accountType")} placeholder="Cuenta Corriente" className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">N° de cuenta</span>
+            <input value={f.accountNumber} onChange={set("accountNumber")} className={`${campo} cell-num`} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Correo</span>
+            <input value={f.email} onChange={set("email")} className={campo} /></label>
+          <label className="flex flex-col gap-1"><span className="text-xs text-ink-soft">Categoría</span>
+            <input value={f.categoryGeneral} onChange={set("categoryGeneral")} className={campo} /></label>
+        </div>
+
+        {/* Mismo texto que la tabla: sin estos datos el banco rechaza la
+            transferencia. Se avisa, no se exige — casi ningún pago importado
+            los trae y frenar la carga sería peor. */}
+        {esEgreso && faltanBancarios && (
+          <p className="mt-3 rounded-lg bg-warn-bg px-3.5 py-2.5 text-sm text-warn">
+            ⚠ falta {faltanBancarios}. Podés agregarlo igual y completarlo después con «Editar», pero el
+            banco no acepta la transferencia sin esos datos.
+          </p>
+        )}
+
+        {f.tipo === "ABONO" && (
+          <p className="mt-3 rounded-lg bg-lavender-bg px-3.5 py-2.5 text-sm text-brand-dark">
+            Un abono recibido queda como <strong>registro</strong>: no se libera, no sale en la nómina del
+            banco y no descuenta en «Abonos por referencia», que se arma con los egresos.
+          </p>
+        )}
+
+        {error && (
+          <div className="mt-3 rounded-lg bg-danger-bg px-3.5 py-2.5 text-sm text-danger" role="alert">
+            <p>{error}</p>
+            {duplicados && duplicados.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs">
+                {duplicados.map((d, i) => (
+                  <li key={`${d.referencia}-${i}`} className="cell-num text-left">
+                    {d.referencia} · {d.monto} · {d.fecha ?? "sin fecha"} · {d.planilla} ·{" "}
+                    {ESTADO_TEXTO[d.estado] ?? d.estado}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          {duplicados && duplicados.length > 0 ? (
+            <button type="button" disabled={guardando} onClick={() => guardar(true)}
+              className="rounded-lg bg-warn px-5 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60">
+              Ya lo revisé, agregarlo igual
+            </button>
+          ) : (
+            <button type="button" disabled={guardando || !f.tipo} onClick={() => guardar(false)}
+              className="rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-deep disabled:opacity-60">
+              {guardando ? "Agregando…" : "Agregar movimiento"}
+            </button>
+          )}
+          <button type="button" onClick={onCerrar}
+            className="rounded-lg border border-line px-5 py-2 text-sm font-medium text-ink-soft hover:bg-soft">Cancelar</button>
+        </div>
+      </div>
     </div>
   );
 }

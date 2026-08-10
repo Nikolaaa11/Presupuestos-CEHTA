@@ -164,6 +164,12 @@ const administradora: Guia = {
         "Cada movimiento muestra «✓ se puede pagar» cuando tiene RUT, banco y cuenta completos, o «⚠ falta…» cuando no. Completalos con «Editar» antes de que el dueño libere: el banco rechaza transferencias incompletas. Al ponerles fecha, además, el aviso de vencimiento se activa solo.",
       href: "/bancos",
     },
+    {
+      titulo: "Cargá a mano lo que no vino en la cartola",
+      detalle:
+        "«+ Agregar movimiento» sirve para una factura suelta, un pago que todavía no aparece en el banco o un abono que entró. Elegís si es egreso a pagar o abono recibido, ponés el monto y la fecha, y queda pendiente igual que cualquier otro. Va a la planilla «Cargas manuales», que no se pisa al subir un Excel. Si ya existe un movimiento con esa referencia y ese monto, te lo muestra antes de dejarte seguir.",
+      href: "/bancos",
+    },
   ],
   noLeToca: [
     { que: "Aprobar presupuestos", quien: "Esa firma es del dueño, después de tu revisión" },
@@ -178,6 +184,18 @@ const administradora: Guia = {
     {
       p: "Le di el visto bueno y encontré un error.",
       r: "Mientras el dueño no lo apruebe, podés observarlo y vuelve a edición del encargado.",
+    },
+    {
+      p: "Cargué un movimiento a mano, ¿por qué no puedo liberarlo yo?",
+      r: "Por la misma razón que no aprobás lo que revisás: quien origina una obligación de pago no la autoriza. Lo libera otra persona con permiso de dueño. Vale también para el administrador de la plataforma.",
+    },
+    {
+      p: "¿Qué pasa si cargo un abono recibido?",
+      r: "Queda como registro: se ve en la tabla y suma en la columna Abono, pero no se libera ni sale en la nómina del banco — no se transfiere hacia afuera plata que entró. Tampoco descuenta en «Abonos por referencia», que se arma con los egresos.",
+    },
+    {
+      p: "Cargué un pago a mano y después llegó en la cartola. ¿Está duplicado?",
+      r: "Sí, y es el error más caro de esta pantalla. Cuando agregás algo con una referencia y un monto que ya existen en la empresa, la plataforma te muestra el movimiento que ya está —con su planilla, fecha y estado— y te pide confirmar. Si ya se duplicó, editá uno de los dos a cero o pedile al administrador que lo saque.",
     },
     {
       p: "¿Qué pasa si el dueño no está?",

@@ -20,8 +20,17 @@ import { dec } from "@/lib/money";
 const fmtFecha = (d: Date | null) =>
   d ? new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(d) : "—";
 const soloFecha = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : "");
-const monto = (m: { debit: unknown; credit: unknown }) =>
-  Math.abs(Number(String(m.debit ?? 0))) || Math.abs(Number(String(m.credit ?? 0)));
+/**
+ * Monto del movimiento con Decimal. Iba en float y su resultado se escribe en
+ * la columna «Monto transferencia» del archivo que se carga en el banco: es
+ * exactamente el lugar donde la regla de no usar float sobre plata más importa.
+ * Devuelve number solo al final, porque la celda del Excel es numérica.
+ */
+const montoDec = (m: { debit: unknown; credit: unknown }) => {
+  const d = dec(String(m.debit ?? 0)).abs();
+  return d.isZero() ? dec(String(m.credit ?? 0)).abs() : d;
+};
+const monto = (m: { debit: unknown; credit: unknown }) => montoDec(m).toNumber();
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -42,7 +51,9 @@ export async function GET(request: Request) {
         releasedBy: { select: { name: true } },
         proofUploadedBy: { select: { name: true } },
         transferredBy: { select: { name: true } },
-        movements: { orderBy: { rowIndex: "asc" } },
+        // Mismo desempate que la pantalla: rowIndex puede empatar entre altas
+        // manuales simultáneas y el orden de la nómina no puede ser al azar.
+        movements: { orderBy: [{ rowIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }] },
       },
     });
     if (!lote) return new Response("Lote no encontrado", { status: 404 });
@@ -210,7 +221,10 @@ export async function GET(request: Request) {
       where: { companyId: company.id },
       orderBy: { createdAt: "asc" },
       include: {
-        movements: { orderBy: { rowIndex: "asc" }, include: { batch: { select: { number: true } } } },
+        movements: {
+          orderBy: [{ rowIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          include: { batch: { select: { number: true } } },
+        },
       },
     });
 

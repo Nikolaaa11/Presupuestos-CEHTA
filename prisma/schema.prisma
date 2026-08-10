@@ -65,6 +65,7 @@ model User {
   fxRatesUpdated FxRate[]
   bankSheetsUploaded BankSheet[]
   bankMovementsReleased BankMovement[]
+  bankMovementsCreated  BankMovement[] @relation("MovimientoCreadoPor")
   batchesReleased    TransferBatch[] @relation("BatchReleasedBy")
   batchesProofed     TransferBatch[] @relation("BatchProofBy")
   batchesTransferred TransferBatch[] @relation("BatchTransferredBy")
@@ -364,10 +365,22 @@ model BankSheet {
   uploadedById String?
   uploadedBy   User?   @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 
+  /**
+   * Planilla de cargas hechas a mano desde la app, no importadas de un Excel.
+   * Es una COLUMNA y no una convención de nombre a propósito: en este módulo el
+   * nombre no es una llave — la subida reemplaza planillas con
+   * `deleteMany({ name })` y `esPlanillaRegistroOC` clasifica por nombre. Apoyar
+   * la regla en el nombre dejaba abierta la puerta de que un Excel con una hoja
+   * llamada igual borrara en cascada todo lo cargado a mano, que es lo único
+   * que no se puede volver a importar de ningún lado.
+   */
+  manual Boolean @default(false)
+
   movements BankMovement[]
 
   createdAt DateTime @default(now())
 
+  @@unique([companyId, name])
   @@index([companyId])
 }
 
@@ -406,6 +419,14 @@ model BankMovement {
   releasedAt   DateTime?
   releasedById String?
   releasedBy   User?     @relation(fields: [releasedById], references: [id], onDelete: SetNull)
+
+  /**
+   * Quién lo creó a mano (null = vino de una planilla importada). Sin este dato
+   * no existe la columna contra la cual comparar para el guard de cuatro ojos:
+   * quien origina un pago no puede ser quien lo libera.
+   */
+  createdById String?
+  createdBy   User?   @relation("MovimientoCreadoPor", fields: [createdById], references: [id], onDelete: SetNull)
 
   /**
    * Circuito de pagos (mandato del directorio):
@@ -485,6 +506,7 @@ enum BankAction {
   COMPROBANTE_SUBIDO
   TRANSFERIDO
   TRANSFERENCIA_REVERTIDA
+  MOVIMIENTO_AGREGADO
   MOVIMIENTO_EDITADO
   PLANILLA_IMPORTADA
   PLANILLA_ELIMINADA
@@ -498,10 +520,18 @@ model BankEvent {
   id          String     @id @default(cuid())
   companyId   String
   company     Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /**
+   * SetNull y no Cascade: la bitácora es append-only y tiene que sobrevivir a
+   * lo que documenta. Con Cascade se borraba sola — `deshacerLiberacion`
+   * escribía LIBERACION_DESHECHA con el batchId y en la línea siguiente borraba
+   * el lote, llevándose el evento recién escrito y todos los LIBERADO de ese
+   * lote. El `detail` de cada evento se escribe autosuficiente justamente para
+   * que siga contando la historia cuando la fila que lo originó ya no está.
+   */
   movementId  String?
-  movement    BankMovement? @relation(fields: [movementId], references: [id], onDelete: Cascade)
+  movement    BankMovement? @relation(fields: [movementId], references: [id], onDelete: SetNull)
   batchId     String?
-  batch       TransferBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch       TransferBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   actorUserId String?
   actor       User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   action      BankAction

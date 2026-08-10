@@ -130,12 +130,61 @@ suma abajo:
   diferir en $1 del pie: el pie suma los Decimal exactos y redondea una sola
   vez. Es lo correcto — jamás redondear a mitad de cálculo.
 
+### 4-quater. Alta manual de movimientos (2026-08-15)
+
+Antes Bancos solo sabía importar un Excel, editar una fila y borrar la planilla.
+Ahora hay **«+ Agregar movimiento»**: una factura suelta, un pago que todavía no
+aparece en el banco, un abono que entró. Nace `PENDIENTE` y entra al circuito
+como cualquier otro.
+
+- **La planilla manual se identifica por COLUMNA (`BankSheet.manual`), no por su
+  nombre.** En este módulo el nombre no es una llave: la subida reemplaza
+  planillas con `deleteMany({ name })` y `esPlanillaRegistroOC` clasifica por
+  nombre. Un Excel con una hoja llamada «Cargas manuales» se llevaba en cascada
+  todo lo cargado a mano —lo único que no se puede reimportar— devolviendo
+  `{ok:true}`. Ahora la subida la rechaza con 422 y el `deleteMany` filtra por
+  `manual: false`.
+- **Id determinístico `manual_<companyId>`** + `@@unique([companyId, name])`: dos
+  altas simultáneas no pueden crear dos planillas homónimas, que además hacían
+  fallar la descarga por empresa (un libro Excel no admite dos hojas iguales).
+- **Cuatro ojos sobre lo cargado a mano**: `liberarPagos` rechaza los
+  movimientos cuyo `createdById` es quien libera, **sin exención para
+  FUND_ADMIN** — mismo criterio que revisar/aprobar el presupuesto. Por eso
+  existe `BankMovement.createdById`.
+- **`parsearMonto` reemplaza a `normalizarMonto`** (`src/lib/tesoreria-core.ts`).
+  El viejo no fallaba: adivinaba mal en silencio. Verificado ejecutándolo:
+  `"1,234.56"` → 1,23 (÷1000), `"250000000.555"` → 250.000.000.555 (×1000),
+  `"-350.000"` → 350.000 sin signo, y `"abc"`/`"(1.500)"`/`"5%"` → 0. El nuevo o
+  entiende o dice por qué no, y la validación va **dentro del Zod** para salir
+  por la rama `ZodError` — si no, `failure()` lo convierte en «No fue posible
+  completar la operación» y el motivo no llega nunca.
+- **La bitácora dejó de borrarse a sí misma.** `BankEvent.movementId/batchId`
+  eran `ON DELETE CASCADE`: `deshacerLiberacion` escribía el evento y en la
+  línea siguiente borraba el lote, y la cascada se llevaba ese evento y todos
+  los `LIBERADO` del lote. Ahora son `SetNull` y cada `detail` se escribe
+  autosuficiente (referencia + monto exacto + fecha) para seguir siendo legible
+  sin la fila.
+- **El movimiento se ve al guardarlo**: la tabla muestra UNA planilla por vez y
+  el alta va a otra, así que el action devuelve `sheetId` y la UI navega. Sin
+  eso el usuario guardaba, no veía nada y lo cargaba de nuevo — el duplicado lo
+  generaba la propia navegación.
+- **Duplicado**: se compara por empresa + referencia normalizada + monto, **sin
+  exigir la misma fecha** (el pago que llega después por cartola trae otra).
+  Nunca bloquea: muestra los existentes con planilla, fecha y estado, y pide un
+  segundo clic.
+- **Un abono recibido no se libera** y ya no rompe el lote: `seleccionables`
+  los excluye, porque `liberarPagos` aborta el lote entero al toparse con el
+  primero y un solo abono impedía liberar los 20 pagos legítimos.
+- **Fuera de alcance, documentado**: el abono manual NO descuenta en «Abonos por
+  referencia» (esa pantalla se arma solo con `debit`); no se pueden cargar
+  movimientos ya pagados; no hay borrado individual de movimientos.
+
 ## 5. Operación
 
 ```bash
 npm run dev        # requiere npm run db:dev en otra terminal (puerto 51214)
 npm run db:apply   # migraciones en dev (migrate dev NO funciona contra el wasm local)
-npm test           # 106 tests — DEBE quedar verde
+npm test           # 145 tests — DEBE quedar verde
 npm run build      # corre scripts/db-deploy.mjs y despues next build
 ```
 
@@ -147,6 +196,10 @@ npm run build      # corre scripts/db-deploy.mjs y despues next build
 - **DATABASE_URL de producción** está como variable sensible en Vercel (no se
   puede leer; `vercel env rm/add` para cambiarla — la API dio 403).
 - **Tras `prisma generate`**: reiniciar el dev server (caché de Turbopack).
+- **Si hay un worktree de Claude en `.claude/worktrees/`**, vive DENTRO del repo
+  y tanto vitest como eslint lo escanean: los conteos se duplican y aparecen
+  cientos de errores que no son de tu árbol. Correr
+  `npx vitest run --exclude "**/.claude/**"` y `npx eslint src scripts`.
 - La base local (`prisma dev`) se cae entre sesiones: relanzar y esperar el
   puerto 51214.
 
@@ -161,6 +214,7 @@ Nada se declara terminado sin verificarlo contra el server real:
 | `verify-avisos-prod.mjs` | Avisos, avance OC sin doble conteo, etapas (14) |
 | `verify-import-prod.mjs` | Plantillas, botón, EJEMPLO, guard de rol (6) — no muta datos |
 | `verify-abonos-prod.mjs` | Abonos por referencia y cuenta origen (5) — no muta datos |
+| `test-alta-movimiento.mjs` | E2E local del alta manual (8 checks, limpia tras sí) |
 | `test-nomina-santander.mjs` | E2E local de la nómina Santander (12 checks, limpia tras sí) |
 | `test-import-presupuesto.mjs` | E2E local de importación (19 checks, limpia tras sí) |
 | `qa-datos.mjs` | Invariantes de datos contra la base (11 checks) |

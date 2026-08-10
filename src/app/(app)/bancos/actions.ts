@@ -15,7 +15,8 @@ import {
   alcanzaEmpresa,
   motivoNoLiberable,
 } from "@/lib/tesoreria";
-import { formatMoney } from "@/lib/money";
+import { parsearMonto, PLANILLA_MANUAL } from "@/lib/tesoreria-core";
+import { dec, formatMoney } from "@/lib/money";
 
 type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
 
@@ -34,7 +35,7 @@ async function cargarMovimientos(ids: string[]) {
   const movimientos = await prisma.bankMovement.findMany({
     where: { id: { in: ids } },
     select: {
-      id: true, estado: true, debit: true, credit: true, reference: true,
+      id: true, estado: true, debit: true, credit: true, reference: true, createdById: true,
       sheet: { select: { companyId: true, name: true } },
     },
   });
@@ -44,11 +45,10 @@ async function cargarMovimientos(ids: string[]) {
   return { movimientos, companyId: [...empresas][0] };
 }
 
-
+/** Monto del movimiento con Decimal — jamás aritmética float sobre plata. */
 const montoDe = (m: { debit: unknown; credit: unknown }) => {
-  const d = Number(String(m.debit ?? 0));
-  const c = Number(String(m.credit ?? 0));
-  return Math.abs(d) || Math.abs(c);
+  const d = dec(String(m.debit ?? 0)).abs();
+  return d.isZero() ? dec(String(m.credit ?? 0)).abs() : d;
 };
 
 // ═══════════════ 1) Guido (dueño) libera ═══════════════
@@ -75,8 +75,19 @@ export async function liberarPagos(movementIds: string[], nota?: string): Promis
       throw new Error(`No se puede liberar: ${noLiberables[0]}`);
     }
 
+    // Cuatro ojos sobre las cargas manuales: quien ORIGINA una obligación de
+    // pago no puede ser quien la autoriza. Sin excepción para FUND_ADMIN, igual
+    // que el guard de revisión/aprobación del presupuesto — si el mismo rol
+    // pudiera saltárselo, el control no existe.
+    const propios = movimientos.filter((m) => m.createdById && m.createdById === user.id);
+    if (propios.length > 0) {
+      throw new Error(
+        `No se puede liberar un movimiento que cargaste vos mismo (${propios[0].reference ?? "sin referencia"}): la liberación la firma otra persona`,
+      );
+    }
+
     const numero = await siguienteNumeroLote(companyId);
-    const total = movimientos.reduce((a, m) => a + montoDe(m), 0);
+    const total = movimientos.reduce((a, m) => a.plus(montoDe(m)), dec(0));
 
     const batch = await prisma.$transaction(async (tx) => {
       const lote = await tx.transferBatch.create({
@@ -274,35 +285,228 @@ export async function revertirTransferencia(batchId: string): Promise<Result> {
   }
 }
 
+// ═══════════════ Alta manual de movimientos ═══════════════
+
+/** No es un nombre de archivo: que nadie salga a buscar un Excel que no existe. */
+const ORIGEN_MANUAL = "Carga manual (sin archivo)";
+
+/** Normaliza una referencia para comparar: "OC 0017", "oc0017" y "OC0017" son la misma. */
+const claveReferencia = (r: string) => r.trim().replace(/\s+/g, " ").toUpperCase();
+
+const altaSchema = z
+  .object({
+    companyCode: z.string().trim().min(1, "Falta la empresa").max(20),
+    tipo: z.enum(["EGRESO", "ABONO"], { message: "Elegí si es un egreso a pagar o un abono recibido" }),
+    monto: z.union([z.string(), z.number()]),
+    date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Poné la fecha del movimiento"),
+    reference: z.string().trim().max(200).optional(),
+    description: z.string().trim().max(500).optional(),
+    rut: z.string().trim().max(20).optional(),
+    bankName: z.string().trim().max(80).optional(),
+    accountNumber: z.string().trim().max(40).optional(),
+    accountType: z.string().trim().max(40).optional(),
+    email: z.string().trim().max(120).optional(),
+    categoryGeneral: z.string().trim().max(80).optional(),
+    businessCenter: z.string().trim().max(80).optional(),
+    confirmarDuplicado: z.boolean().optional(),
+  })
+  .superRefine((v, ctx) => {
+    // El monto se valida ACÁ y no en el cuerpo del action para que el mensaje
+    // salga por la rama ZodError de failure() y llegue textual al usuario: un
+    // Error() común se convierte en "No fue posible completar la operación".
+    const leido = parsearMonto(v.monto);
+    if (!leido.ok) {
+      ctx.addIssue({ code: "custom", path: ["monto"], message: leido.motivo });
+      return;
+    }
+    if (dec(leido.valor).lte(0)) {
+      ctx.addIssue({ code: "custom", path: ["monto"], message: "El monto tiene que ser mayor que cero" });
+    }
+    // Sin referencia el banco recibe la transferencia sin nombre de
+    // beneficiario (columna G del formato Santander) y la fila no se agrupa en
+    // «Abonos por referencia». En un abono recibido es menos grave, pero igual
+    // sirve para reconocerlo.
+    if (v.tipo === "EGRESO" && !v.reference) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reference"],
+        message: "Poné a quién se le paga: es el nombre que va en la nómina del banco",
+      });
+    }
+  });
+
+export type Duplicado = { referencia: string; monto: string; fecha: string | null; planilla: string; estado: string };
+
+type ResultadoAlta =
+  | { ok: true; sheetId: string; movementId: string }
+  | { ok: false; error: string; duplicados?: Duplicado[] };
+
+/**
+ * La planilla de cargas manuales de la empresa, creada la primera vez.
+ * El id es determinístico (`manual_<companyId>`) para que el alta sea idempotente
+ * sobre la clave primaria: dos altas simultáneas no pueden crear dos planillas
+ * homónimas — que además rompían la descarga por empresa, porque un libro Excel
+ * no admite dos hojas con el mismo nombre.
+ */
+async function planillaManual(companyId: string) {
+  const id = `manual_${companyId}`;
+  try {
+    return await prisma.bankSheet.upsert({
+      where: { id },
+      create: { id, companyId, name: PLANILLA_MANUAL, sourceFile: ORIGEN_MANUAL, manual: true },
+      update: {},
+    });
+  } catch {
+    // Carrera perdida: la creó la otra transacción. Leerla es el resultado correcto.
+    return await prisma.bankSheet.findUniqueOrThrow({ where: { id } });
+  }
+}
+
+/**
+ * Agrega un movimiento a mano: lo que llega fuera de la cartola (una factura
+ * suelta, un pago que todavía no aparece en el banco, un abono recibido).
+ *
+ * Entra al circuito como cualquier otro: nace PENDIENTE, se puede liberar,
+ * sale en la nómina y queda en la bitácora. Lo que NO se puede es nacer ya
+ * liberado o transferido — eso sería registrar un pago que nadie autorizó.
+ */
+export async function agregarMovimiento(data: unknown): Promise<ResultadoAlta> {
+  try {
+    const v = altaSchema.parse(data);
+
+    // La empresa se resuelve en el servidor a partir del código, y el sheetId
+    // NUNCA viene del cliente: si el action aceptara los dos, un encargado
+    // podría colgar su movimiento de la planilla de otra empresa.
+    const company = await prisma.company.findUnique({
+      where: { code: v.companyCode.toUpperCase() },
+      select: { id: true, code: true },
+    });
+    if (!company) throw new Error("No se encontró la empresa");
+    const user = await requireAcceso(company.id, ROLES_EDICION);
+
+    const leido = parsearMonto(v.monto);
+    if (!leido.ok) throw new Error("No se puede guardar: el monto no se entiende");
+    const monto = leido.valor;
+    const esEgreso = v.tipo === "EGRESO";
+
+    // Duplicado: el error caro no es el doble clic, es cargar a mano un pago
+    // que después llega por cartola. Por eso se compara por empresa +
+    // referencia + monto, SIN exigir la misma fecha. Nunca bloquea: avisa.
+    if (v.reference && !v.confirmarDuplicado) {
+      const clave = claveReferencia(v.reference);
+      const candidatos = await prisma.bankMovement.findMany({
+        where: {
+          sheet: { companyId: company.id },
+          ...(esEgreso ? { debit: monto } : { credit: monto }),
+        },
+        select: {
+          reference: true, debit: true, credit: true, date: true, estado: true,
+          sheet: { select: { name: true } },
+        },
+        take: 200,
+      });
+      const duplicados = candidatos
+        .filter((c) => c.reference && claveReferencia(c.reference) === clave)
+        .slice(0, 5)
+        .map((c) => ({
+          referencia: c.reference ?? "—",
+          monto: formatMoney(esEgreso ? c.debit : c.credit, "CLP"),
+          fecha: c.date ? c.date.toISOString().slice(0, 10) : null,
+          planilla: c.sheet.name,
+          estado: c.estado,
+        }));
+      if (duplicados.length > 0) {
+        return {
+          ok: false,
+          error: `Ya hay ${duplicados.length === 1 ? "un movimiento" : `${duplicados.length} movimientos`} con esa referencia y ese monto en ${company.code}. Revisá que no sea el mismo antes de agregarlo de nuevo.`,
+          duplicados,
+        };
+      }
+    }
+
+    const sheet = await planillaManual(company.id);
+    const vacioANull = (s?: string) => (s && s.trim() !== "" ? s.trim() : null);
+
+    const movimiento = await prisma.$transaction(async (tx) => {
+      const ultimo = await tx.bankMovement.aggregate({
+        where: { sheetId: sheet.id },
+        _max: { rowIndex: true },
+      });
+      const creado = await tx.bankMovement.create({
+        data: {
+          sheetId: sheet.id,
+          rowIndex: (ultimo._max.rowIndex ?? 0) + 1,
+          date: new Date(`${v.date}T12:00:00Z`),
+          reference: vacioANull(v.reference),
+          description: vacioANull(v.description),
+          // Excluyentes por construcción: el tipo decide cuál lleva el monto y
+          // el otro queda en cero. Una fila con débito y crédito a la vez es
+          // una particularidad del registro de OCs, no algo que se cargue a mano.
+          debit: esEgreso ? monto : "0",
+          credit: esEgreso ? "0" : monto,
+          rut: vacioANull(v.rut),
+          bankName: vacioANull(v.bankName),
+          accountNumber: vacioANull(v.accountNumber),
+          accountType: vacioANull(v.accountType),
+          email: vacioANull(v.email),
+          categoryGeneral: vacioANull(v.categoryGeneral),
+          businessCenter: vacioANull(v.businessCenter),
+          createdById: user.id,
+          // estado / released / batchId NO se aceptan del cliente: nacen en su
+          // valor por defecto (PENDIENTE, false, null).
+        },
+        select: { id: true },
+      });
+      await registrarBitacora(tx, {
+        companyId: company.id,
+        actorUserId: user.id,
+        action: "MOVIMIENTO_AGREGADO",
+        movementId: creado.id,
+        // Autosuficiente: el evento sobrevive a la fila (FK SetNull) y tiene que
+        // seguir diciendo qué se cargó sin ella. Monto exacto Y formateado,
+        // porque formatMoney redondea los centavos para mostrar.
+        detail: `${esEgreso ? "Egreso a pagar" : "Abono recibido"} · ${v.reference ?? "sin referencia"} · ${formatMoney(monto, "CLP")} (${monto}) · fecha ${v.date}`,
+      });
+      return creado;
+    });
+
+    revalidatePath("/bancos");
+    return { ok: true, sheetId: sheet.id, movementId: movimiento.id };
+  } catch (error) {
+    return failure(error) as ResultadoAlta;
+  }
+}
+
 // ═══════════════ Edición de movimientos ═══════════════
 
-const movimientoSchema = z.object({
-  reference: z.string().trim().max(200).nullable().optional(),
-  description: z.string().trim().max(500).nullable().optional(),
-  debit: z.union([z.string(), z.number()]).optional(),
-  credit: z.union([z.string(), z.number()]).optional(),
-  rut: z.string().trim().max(20).nullable().optional(),
-  bankName: z.string().trim().max(80).nullable().optional(),
-  accountNumber: z.string().trim().max(40).nullable().optional(),
-  accountType: z.string().trim().max(40).nullable().optional(),
-  email: z.string().trim().max(120).nullable().optional(),
-  categoryGeneral: z.string().trim().max(80).nullable().optional(),
-  businessCenter: z.string().trim().max(80).nullable().optional(),
-  date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida").nullable().optional(),
-});
+const movimientoSchema = z
+  .object({
+    reference: z.string().trim().max(200).nullable().optional(),
+    description: z.string().trim().max(500).nullable().optional(),
+    debit: z.union([z.string(), z.number()]).optional(),
+    credit: z.union([z.string(), z.number()]).optional(),
+    rut: z.string().trim().max(20).nullable().optional(),
+    bankName: z.string().trim().max(80).nullable().optional(),
+    accountNumber: z.string().trim().max(40).nullable().optional(),
+    accountType: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(120).nullable().optional(),
+    categoryGeneral: z.string().trim().max(80).nullable().optional(),
+    businessCenter: z.string().trim().max(80).nullable().optional(),
+    date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida").nullable().optional(),
+  });
+// Los montos NO se validan acá sino en el cuerpo de `editarMovimiento`, donde
+// se conoce el valor guardado. Validar a ciegas rompía dos cosas reales:
+//   - Vaciar el campo (la forma natural de poner cero, y el editor manda
+//     SIEMPRE los dos montos) tiraba abajo la edición entera —incluidos los
+//     cambios de RUT o cuenta— con un «Escribí el monto» fuera de contexto.
+//   - Una fila guardada con un monto que el parser de hoy no acepta (un
+//     negativo de una cartola vieja) quedaba imposible de editar para siempre,
+//     porque el editor la precarga tal cual y la reenvía sin tocarla.
 
 const ETIQUETA_CAMPO: Record<string, string> = {
   reference: "referencia", description: "descripción", debit: "egreso", credit: "abono",
   rut: "RUT", bankName: "banco", accountNumber: "n° cuenta", accountType: "tipo de cuenta",
   email: "correo", categoryGeneral: "categoría", businessCenter: "centro de negocio", date: "fecha",
-};
-
-const normalizarMonto = (v: unknown): string => {
-  const raw = String(v ?? "").trim().replace(/\$|\s/g, "");
-  if (raw === "") return "0";
-  const norm = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/\.(?=\d{3}\b)/g, "");
-  const n = Number(norm);
-  return Number.isFinite(n) ? Math.abs(n).toFixed(2) : "0";
 };
 
 /** Edita un movimiento y deja en la bitácora cada campo con su valor anterior. */
@@ -327,9 +531,29 @@ export async function editarMovimiento(movementId: string, data: unknown): Promi
     for (const [campo, valor] of Object.entries(parsed)) {
       if (valor === undefined) continue;
       if (campo === "debit" || campo === "credit") {
-        const nuevo = normalizarMonto(valor);
         const anterior = String(actual[campo as "debit" | "credit"]);
-        if (Number(nuevo) !== Number(anterior)) {
+        const crudo = String(valor ?? "").trim();
+
+        // Igual a lo guardado (en cualquier forma equivalente): no se toca ni
+        // se valida. El editor reenvía SIEMPRE los dos montos, así que sin esto
+        // una fila con un valor que el parser de hoy rechaza quedaría imposible
+        // de editar hasta en su RUT.
+        let sinCambio = false;
+        try { sinCambio = dec(crudo).eq(dec(anterior)); } catch { sinCambio = crudo === anterior; }
+        if (sinCambio) continue;
+
+        // Vaciar el campo es la forma natural de poner el monto en cero.
+        let nuevo: string;
+        if (crudo === "") nuevo = "0.00";
+        else {
+          const leido = parsearMonto(crudo);
+          // «No se puede» está en la lista blanca de failure(): así el motivo
+          // llega textual en vez de convertirse en el error genérico.
+          if (!leido.ok) throw new Error(`No se puede guardar el ${ETIQUETA_CAMPO[campo]}: ${leido.motivo}`);
+          nuevo = leido.valor;
+        }
+
+        if (!dec(nuevo).eq(dec(anterior))) {
           update[campo] = nuevo;
           cambios.push(`${ETIQUETA_CAMPO[campo]}: ${formatMoney(anterior, "CLP")} → ${formatMoney(nuevo, "CLP")}`);
         }
@@ -378,20 +602,33 @@ export async function deleteSheet(sheetId: string): Promise<Result> {
   try {
     const sheet = await prisma.bankSheet.findUnique({
       where: { id: sheetId },
-      select: { id: true, companyId: true, name: true },
+      select: {
+        id: true, companyId: true, name: true, manual: true,
+        movements: { select: { debit: true, credit: true } },
+      },
     });
     if (!sheet) throw new Error("Planilla no encontrada");
     const user = await requireUser();
     if (!puede(user, ROLES_EDICION) || !alcanzaEmpresa(user, sheet.companyId)) {
       throw new Error("Tu rol no permite eliminar planillas de esta empresa");
     }
+    // Una cartola se vuelve a subir; lo cargado a mano no está en ningún lado.
+    if (sheet.manual) {
+      throw new Error(
+        "No se puede eliminar la planilla de cargas manuales: es lo único que no se puede volver a importar. Editá o corregí los movimientos uno por uno.",
+      );
+    }
+
+    const total = sheet.movements.reduce((a, m) => a.plus(montoDe(m)), dec(0));
 
     await prisma.$transaction(async (tx) => {
       await registrarBitacora(tx, {
         companyId: sheet.companyId,
         actorUserId: user.id,
         action: "PLANILLA_ELIMINADA",
-        detail: sheet.name,
+        // Con cuántos movimientos y por cuánta plata: sin eso, la línea de
+        // bitácora no alcanza para saber qué se perdió.
+        detail: `${sheet.name} · ${sheet.movements.length} movimiento(s) por ${formatMoney(total, "CLP")}`,
       });
       await tx.bankSheet.delete({ where: { id: sheetId } });
     });

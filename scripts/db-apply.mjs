@@ -17,6 +17,9 @@ if (!url) {
 }
 
 const client = new pg.Client({ connectionString: url });
+// Igual que db-deploy: sin el listener, los RAISE WARNING de una migración se
+// pierden y el ✓ del log miente.
+client.on("notice", (n) => console.log(`db-apply: [${n.severity}] ${n.message}`));
 await client.connect();
 
 await client.query(`

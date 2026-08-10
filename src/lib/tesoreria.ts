@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { requireUser, type SessionUser } from "@/lib/authz";
+import type { BankAction } from "@/generated/prisma/enums";
 
 export { esPlanillaRegistroOC, motivoNoLiberable } from "@/lib/tesoreria-core";
 
@@ -47,20 +48,21 @@ export async function requireAcceso(companyId: string, roles: readonly string[])
 }
 
 /** Escribe una línea de bitácora. Nunca se actualiza ni se borra. */
+/**
+ * El tipo sale del enum generado por Prisma, no de una lista escrita a mano:
+ * una acción nueva en el schema aparecía acá solo si alguien se acordaba de
+ * copiarla, y ese "si alguien se acuerda" ya falló una vez.
+ *
+ * `detail` se escribe AUTOSUFICIENTE — con la referencia, el monto y la fecha —
+ * porque el evento sobrevive a la fila que lo originó (las FK son SetNull) y
+ * tiene que seguir contando qué pasó sin ella.
+ */
 export async function registrarBitacora(
   tx: Pick<typeof prisma, "bankEvent">,
   data: {
     companyId: string;
     actorUserId: string;
-    action:
-      | "LIBERADO"
-      | "LIBERACION_DESHECHA"
-      | "COMPROBANTE_SUBIDO"
-      | "TRANSFERIDO"
-      | "TRANSFERENCIA_REVERTIDA"
-      | "MOVIMIENTO_EDITADO"
-      | "PLANILLA_IMPORTADA"
-      | "PLANILLA_ELIMINADA";
+    action: BankAction;
     movementId?: string | null;
     batchId?: string | null;
     detail?: string | null;
@@ -85,7 +87,9 @@ export const ETIQUETA_ESTADO: Record<string, string> = {
   TRANSFERIDO: "Transferido",
 };
 
-export const ETIQUETA_ACCION: Record<string, string> = {
+/** Toda acción del enum tiene que estar acá: sin etiqueta se lee el enum crudo. */
+export const ETIQUETA_ACCION: Record<BankAction, string> = {
+  MOVIMIENTO_AGREGADO: "agregó un movimiento",
   LIBERADO: "liberó el pago",
   LIBERACION_DESHECHA: "deshizo la liberación",
   COMPROBANTE_SUBIDO: "subió el comprobante de transferencia",
