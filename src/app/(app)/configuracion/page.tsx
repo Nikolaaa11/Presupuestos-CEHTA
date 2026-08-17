@@ -4,7 +4,8 @@ import { BUDGET_YEAR } from "@/lib/budget";
 import { APPROVAL_LEVELS } from "@/lib/capex";
 import { FxForm, CategoriesManager, CuentasOrigenManager } from "./config-forms";
 import { DropboxPanel, type EstadoDropbox } from "./dropbox-panel";
-import { credencialesConfiguradas, CONEXION_ID } from "@/lib/dropbox";
+import { headers } from "next/headers";
+import { credencialesConfiguradas, probarCredenciales, urlDeRetorno, CONEXION_ID } from "@/lib/dropbox";
 
 const FX_DEFAULT = { ufToClp: "39200", usdToClp: "950" };
 
@@ -40,8 +41,21 @@ export default async function ConfiguracionPage({
     }),
   ]);
 
+  // Solo se le pregunta a Dropbox cuando todavía no hay conexión: es el momento
+  // en que sirve, y evita una llamada externa en cada visita.
+  const prueba = conexion ? { ok: true } : await probarCredenciales();
+
+  // La misma dirección que va a usar el flujo, calculada igual: si acá dijera
+  // una y el flujo mandara otra, la pantalla estaría mintiendo.
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const host = h.get("host") ?? "localhost:3000";
+
   const estadoDropbox: EstadoDropbox = {
     credencialesListas: credencialesConfiguradas(),
+    credencialesValidas: prueba.ok,
+    credencialesMotivo: prueba.ok ? undefined : prueba.motivo,
+    urlDeRetorno: urlDeRetorno(`${proto}://${host}`),
     conectado: Boolean(conexion),
     cuentaNombre: conexion?.cuentaNombre ?? null,
     cuentaEmail: conexion?.cuentaEmail ?? null,

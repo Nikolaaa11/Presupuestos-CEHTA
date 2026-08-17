@@ -15,6 +15,11 @@ import { desconectarDropbox } from "./actions";
 
 export type EstadoDropbox = {
   credencialesListas: boolean;
+  /** Dropbox reconoce la App key y el App secret cargados en el servidor. */
+  credencialesValidas: boolean;
+  credencialesMotivo?: string;
+  /** La que hay que tener registrada en la app de Dropbox, exacta. */
+  urlDeRetorno: string;
   conectado: boolean;
   cuentaNombre: string | null;
   cuentaEmail: string | null;
@@ -88,16 +93,47 @@ export function DropboxPanel({
           </p>
         </div>
       ) : !estado.conectado ? (
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <a
-            href="/api/dropbox/conectar"
-            className="rounded-lg bg-brand px-5 py-2 text-sm font-semibold text-white transition hover:bg-brand-deep"
-          >
-            Conectar Dropbox
-          </a>
-          <span className="text-xs text-ink-soft">
-            Te va a llevar a Dropbox para autorizar. Solo pedimos permiso de <strong>lectura</strong>.
-          </span>
+        <div className="mt-4 space-y-3">
+          {/* Las variables sensibles de Vercel no se pueden leer de vuelta, así
+              que la única forma de saber si están bien es preguntárselo a
+              Dropbox. Sin esto, unas credenciales mal pegadas solo se
+              descubren al fallar la conexión. */}
+          {!estado.credencialesValidas && (
+            <div className="rounded-lg bg-danger-bg px-3.5 py-3 text-sm text-danger">
+              <p className="font-semibold">Dropbox no acepta las credenciales cargadas.</p>
+              <p className="mt-1 text-xs leading-relaxed">{estado.credencialesMotivo}</p>
+            </div>
+          )}
+
+          {/* La causa más común de que falle la conexión: esta dirección no está
+              registrada, o está con una letra distinta. */}
+          <div className="rounded-lg border border-line bg-soft px-3.5 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
+              Esta dirección tiene que estar registrada en tu app de Dropbox
+            </p>
+            <p className="cell-num mt-1 break-all text-xs text-ink">{estado.urlDeRetorno}</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-ink-soft">
+              Va en dropbox.com/developers/apps → tu app → Settings → OAuth 2 → Redirect URIs.
+              Tiene que quedar <strong>idéntica</strong>, incluida la parte final.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              href="/api/dropbox/conectar"
+              className={`rounded-lg px-5 py-2 text-sm font-semibold text-white transition ${
+                estado.credencialesValidas ? "bg-brand hover:bg-brand-deep" : "bg-ink-soft/60 pointer-events-none"
+              }`}
+              aria-disabled={!estado.credencialesValidas}
+            >
+              Conectar Dropbox
+            </a>
+            <span className="text-xs text-ink-soft">
+              {estado.credencialesValidas
+                ? "Te va a llevar a Dropbox para autorizar. Solo pedimos permiso de lectura."
+                : "Primero hay que corregir las credenciales."}
+            </span>
+          </div>
         </div>
       ) : (
         <div className="mt-4 space-y-3">

@@ -36,8 +36,19 @@ function credenciales() {
   return { key, secret };
 }
 
-/** La dirección de retorno tiene que coincidir EXACTA con la registrada en Dropbox. */
+/**
+ * La dirección de retorno tiene que coincidir EXACTA con la registrada en
+ * Dropbox, incluido el path.
+ *
+ * Derivarla de la URL de la petición tiene una trampa: si alguien entra por la
+ * URL de un deploy concreto (presupuestos-cehta-92whrb92o-….vercel.app) en vez
+ * del alias estable, la dirección calculada no es la registrada y Dropbox
+ * rechaza la conexión sin que nada esté "mal". Por eso se puede fijar con
+ * DROPBOX_REDIRECT_URI, y la pantalla muestra cuál está usando.
+ */
 export function urlDeRetorno(origen: string): string {
+  const fijada = process.env.DROPBOX_REDIRECT_URI?.trim();
+  if (fijada) return fijada;
   return `${origen.replace(/\/$/, "")}/api/dropbox/callback`;
 }
 
@@ -79,15 +90,70 @@ async function pedirToken(cuerpo: Record<string, string>): Promise<RespuestaToke
   });
   const json = (await res.json().catch(() => ({}))) as RespuestaToken;
   if (!res.ok || json.error) {
-    // El detalle de Dropbox se traduce a algo accionable; el error crudo no
-    // sale nunca al cliente.
+    // Cada causa tiene su arreglo distinto, así que el mensaje tiene que
+    // distinguirlas. La versión anterior decía "revisá las credenciales" para
+    // cualquier fallo — incluidos los que no tenían nada que ver.
+    if (json.error === "invalid_client") {
+      throw new Error(
+        "Dropbox no reconoce la App key o el App secret cargados en Vercel. Volvé a copiarlos desde dropbox.com/developers/apps → Settings.",
+      );
+    }
+    if (json.error === "invalid_grant") {
+      throw new Error(
+        "Dropbox rechazó el código de autorización. Suele pasar si la dirección de retorno no es idéntica a la registrada, o si pasó demasiado tiempo. Probá conectar de nuevo.",
+      );
+    }
+    // El código de error de Dropbox no es información sensible y es lo único
+    // que permite diagnosticar el resto de los casos.
     throw new Error(
-      json.error === "invalid_grant"
-        ? "Dropbox rechazó la autorización. Puede haber vencido: conectá de nuevo."
-        : "No se pudo hablar con Dropbox. Revisá las credenciales en Vercel.",
+      `Dropbox devolvió un error al pedir el permiso${json.error ? ` (${json.error})` : ` (HTTP ${res.status})`}.`,
     );
   }
   return json;
+}
+
+/**
+ * ¿Vercel tiene cargadas unas credenciales que Dropbox reconozca?
+ *
+ * Se pide un token con un código a propósito inválido: si el par key/secret
+ * está mal, Dropbox responde `invalid_client`; si está bien, responde
+ * `invalid_grant` — porque lo único malo es el código, que inventamos nosotros.
+ * Así se comprueba sin que nadie tenga que autorizar nada.
+ *
+ * Hace falta porque las variables sensibles de Vercel no se pueden leer de
+ * vuelta: sin esto, unas credenciales mal pegadas solo se descubren cuando
+ * alguien intenta conectar y falla.
+ */
+export async function probarCredenciales(): Promise<{ ok: boolean; motivo?: string }> {
+  if (!credencialesConfiguradas()) {
+    return { ok: false, motivo: "Faltan DROPBOX_APP_KEY o DROPBOX_APP_SECRET en las variables de entorno." };
+  }
+  try {
+    const { key, secret } = credenciales();
+    const res = await fetch(TOKEN, {
+      method: "POST",
+      headers: {
+        Authorization: "Basic " + Buffer.from(`${key}:${secret}`).toString("base64"),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: "codigo-a-proposito-invalido",
+        redirect_uri: "http://localhost/no-usado",
+      }),
+    });
+    const json = (await res.json().catch(() => ({}))) as RespuestaToken;
+    if (json.error === "invalid_grant") return { ok: true };
+    if (json.error === "invalid_client") {
+      return {
+        ok: false,
+        motivo: "Dropbox no reconoce la App key o el App secret. Volvé a copiarlos desde Settings de tu app en Dropbox.",
+      };
+    }
+    return { ok: false, motivo: `Dropbox respondió ${json.error ?? `HTTP ${res.status}`}.` };
+  } catch {
+    return { ok: false, motivo: "No se pudo contactar a Dropbox para comprobar las credenciales." };
+  }
 }
 
 export async function canjearCodigo(codigo: string, origen: string) {
