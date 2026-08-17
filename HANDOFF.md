@@ -199,6 +199,49 @@ del circuito de pagos que convertía plata a float.
 la planilla abierta, cuando en RHO el servidor solo acepta **1** movimiento
 ($40.171). Se arregla en la fase de pago parcial (`specs/PROMPT-MAESTRO-PAGO-PARCIAL.md`).
 
+### 4-sexies. Conexión con Dropbox (2026-08-17)
+
+**La plataforma corre en Vercel y no puede leer `D:\Dropbox\…`.** Lo que hace es
+hablar con la **nube** de Dropbox por API; el cliente de escritorio ya subió
+esos archivos ahí. Es la única arquitectura posible y conviene decirlo antes de
+que alguien intente montar la unidad.
+
+- **Credenciales**: `DROPBOX_APP_KEY` y `DROPBOX_APP_SECRET` en Vercel, marcadas
+  como **sensitive** — no se pueden leer de vuelta ni con `vercel env pull`
+  (devuelve cadena vacía, igual que `DATABASE_URL`). Para desarrollar en local
+  hay que pegarlas a mano una vez en `.env`.
+- **Solo lectura**: los scopes son `account_info.read`, `files.metadata.read` y
+  `files.content.read`. La app no puede escribir en el Dropbox del fondo, y eso
+  lo impone Dropbox, no una condición del código.
+- **El refresh token va cifrado** (AES-256-GCM, `src/lib/cripto-core.ts`, clave
+  derivada de `AUTH_SECRET` por HKDF con un `info` propio). Un volcado de la
+  base no alcanza para entrar a Dropbox. GCM además autentica: alterar un byte
+  hace fallar el descifrado en vez de devolver basura.
+- **El access token no se guarda**: se pide uno nuevo con el refresh token en
+  cada operación. Son 200 ms y elimina la clase entera de bugs de "el token
+  guardado venció y nadie se enteró".
+- **`state` con cookie httpOnly de 10 minutos** y comparación en tiempo
+  constante: sin eso, alguien podría hacer que la plataforma quede conectada a
+  OTRA cuenta de Dropbox y ver todo lo que se importe.
+- **Dropbox Business**: `cuentaActual` detecta `root_info[".tag"] === "team"` y
+  guarda el `root_namespace_id`; las llamadas mandan `Dropbox-API-Path-Root`.
+  Sin eso, en una cuenta de equipo la app ve el espacio personal y no encuentra
+  las carpetas compartidas.
+- **La carpeta del fondo mapea con las entidades**: `01_Administradora de
+  Fondos`→AFIS, `03_Climate Smart Leasing`→CSL, `04_RHO Generación`→RHO (con
+  Panimávida adentro), `05_DTE`, `06_Revtech`, `07_Evoque`, `08_Trongkai`,
+  `09_Consulting & Energy`→CENERGY. Sin entidad: `10_JP_Ciclo`,
+  `11- JP_FIP Ciclo`, `Manuel Rendiciones`. Inventario real: 3.351 PDF y 253
+  Excel.
+- **Sincronizar NO es importar**: la detección de cambios es automática, aplicar
+  lo confirma una persona. La subida reemplaza planillas por nombre y no
+  preserva `estado` ni `batchId`, así que re-importar una cartola rompe el
+  circuito de pagos de lo ya liberado (ver 4-bis y `upload/route.ts`).
+
+Pendiente de esta fase: elegir la carpeta raíz, el mapeo editable, el explorador
+de archivos y la detección de cambios por cursor. El spec completo está en
+`specs/PROMPT-MAESTRO-DROPBOX.md`.
+
 ## 5. Operación
 
 ```bash
@@ -240,6 +283,8 @@ Nada se declara terminado sin verificarlo contra el server real:
 | `qa-datos.mjs` | Invariantes de datos contra la base (11 checks) |
 | `listar-usuarios.mjs` | Las 13 cuentas entran de verdad |
 | `exportar-usuarios.mjs` | Excel de las 13 cuentas para repartir, verificando cada login contra producción antes de escribirlo (el .xlsx no se commitea: lleva claves) |
+| `verificar-dropbox.mjs` | Las credenciales de Dropbox están bien pegadas y Dropbox las reconoce (7 checks, sin navegador) |
+| `verificar-dropbox-flujo.mjs` | Guards de rol, permisos pedidos, state y que Dropbox acepte la app (12 checks) |
 
 Además: revisión adversarial multi-agente antes de cada deploy grande
 (encontró y corrigió 1 DoS real, doble conteo de OCs, pérdidas silenciosas de

@@ -3,13 +3,23 @@ import { requireFundAdmin } from "@/lib/authz";
 import { BUDGET_YEAR } from "@/lib/budget";
 import { APPROVAL_LEVELS } from "@/lib/capex";
 import { FxForm, CategoriesManager, CuentasOrigenManager } from "./config-forms";
+import { DropboxPanel, type EstadoDropbox } from "./dropbox-panel";
+import { credencialesConfiguradas, CONEXION_ID } from "@/lib/dropbox";
 
 const FX_DEFAULT = { ufToClp: "39200", usdToClp: "950" };
 
-export default async function ConfiguracionPage() {
-  await requireFundAdmin();
+const fechaHora = (d: Date) =>
+  new Intl.DateTimeFormat("es-CL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(d);
 
-  const [fx, categories, companies] = await Promise.all([
+export default async function ConfiguracionPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ dropbox?: string; motivo?: string }>;
+}) {
+  await requireFundAdmin();
+  const { dropbox, motivo } = await searchParams;
+
+  const [fx, categories, companies, conexion] = await Promise.all([
     prisma.fxRate.findUnique({ where: { year: BUDGET_YEAR } }),
     prisma.expenseCategory.findMany({
       orderBy: { sortOrder: "asc" },
@@ -19,7 +29,34 @@ export default async function ConfiguracionPage() {
       orderBy: { code: "asc" },
       select: { id: true, code: true, name: true, cuentaOrigen: true },
     }),
+    prisma.dropboxConnection.findUnique({
+      where: { id: CONEXION_ID },
+      // El token cifrado NUNCA se selecciona: no tiene por qué salir de la base
+      // a un componente, ni siquiera de servidor.
+      select: {
+        cuentaNombre: true, cuentaEmail: true, esEquipo: true, carpetaRaiz: true,
+        conectadoEl: true, conectadoPor: { select: { name: true } },
+      },
+    }),
   ]);
+
+  const estadoDropbox: EstadoDropbox = {
+    credencialesListas: credencialesConfiguradas(),
+    conectado: Boolean(conexion),
+    cuentaNombre: conexion?.cuentaNombre ?? null,
+    cuentaEmail: conexion?.cuentaEmail ?? null,
+    esEquipo: conexion?.esEquipo ?? false,
+    carpetaRaiz: conexion?.carpetaRaiz ?? null,
+    conectadoPor: conexion?.conectadoPor?.name ?? null,
+    conectadoEl: conexion ? fechaHora(conexion.conectadoEl) : null,
+  };
+
+  const aviso =
+    dropbox === "conectado"
+      ? { tipo: "ok" as const, texto: "Dropbox quedó conectado. El siguiente paso es elegir la carpeta que se sincroniza." }
+      : dropbox === "error"
+        ? { tipo: "error" as const, texto: motivo ?? "No se pudo conectar con Dropbox." }
+        : null;
 
   return (
     <div className="space-y-6">
@@ -44,6 +81,8 @@ export default async function ConfiguracionPage() {
           lines: c._count.lines,
         }))}
       />
+
+      <DropboxPanel estado={estadoDropbox} aviso={aviso} />
 
       <CuentasOrigenManager companies={companies} />
 

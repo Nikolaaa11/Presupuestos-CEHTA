@@ -37,6 +37,7 @@ model Company {
   bankSheets BankSheet[]
   transferBatches TransferBatch[]
   bankEvents      BankEvent[]
+  dropboxCarpetas DropboxCarpeta[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -66,6 +67,7 @@ model User {
   bankSheetsUploaded BankSheet[]
   bankMovementsReleased BankMovement[]
   bankMovementsCreated  BankMovement[] @relation("MovimientoCreadoPor")
+  dropboxConexiones     DropboxConnection[]
   batchesReleased    TransferBatch[] @relation("BatchReleasedBy")
   batchesProofed     TransferBatch[] @relation("BatchProofBy")
   batchesTransferred TransferBatch[] @relation("BatchTransferredBy")
@@ -498,6 +500,70 @@ model TransferBatch {
 
   @@unique([companyId, number])
   @@index([companyId, status])
+}
+
+/**
+ * Conexión con Dropbox. Hay UNA sola en toda la plataforma (la cuenta del
+ * fondo), por eso la fila se fija con id = "unica": evita que dos
+ * conexiones simultáneas dejen la app apuntando a cuentas distintas.
+ *
+ * El refresh token abre TODA la carpeta financiera del grupo, así que no se
+ * guarda en claro: viaja cifrado con AES-256-GCM (ver src/lib/cripto.ts). Un
+ * volcado de la base no alcanza para entrar a Dropbox.
+ */
+model DropboxConnection {
+  id String @id @default("unica")
+
+  /** Cifrado. Nunca sale del servidor ni se muestra en pantalla. */
+  refreshTokenCifrado String
+  /** Alcance concedido, para detectar que faltan permisos sin tener que fallar. */
+  scopes String?
+
+  /** Con qué cuenta quedó conectada, para mostrarlo. */
+  cuentaNombre String?
+  cuentaEmail  String?
+  /** Dropbox Business: los archivos del equipo viven en otro espacio. */
+  esEquipo         Boolean @default(false)
+  rootNamespaceId  String?
+
+  /** Carpeta raíz que se sincroniza, tal como la nombra Dropbox. */
+  carpetaRaiz String?
+  /** Cursor de list_folder: con esto se pregunta "¿qué cambió?" sin releer todo. */
+  cursor String?
+
+  conectadoPorId String?
+  conectadoPor   User?    @relation(fields: [conectadoPorId], references: [id], onDelete: SetNull)
+  conectadoEl    DateTime @default(now())
+  ultimaMiradaEl DateTime?
+
+  carpetas DropboxCarpeta[]
+
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * Qué carpeta de Dropbox corresponde a qué empresa. Es un mapeo explícito y
+ * editable: adivinarlo por el nombre fallaría con «09_Consulting & Energy
+ * Ltda» → CENERGY, y una carpeta mapeada a la empresa equivocada mete los
+ * movimientos de una entidad en otra.
+ */
+model DropboxCarpeta {
+  id           String            @id @default(cuid())
+  conexionId   String
+  conexion     DropboxConnection @relation(fields: [conexionId], references: [id], onDelete: Cascade)
+
+  /** Ruta relativa a la carpeta raíz, ej. "/01_Administradora de Fondos". */
+  ruta String
+
+  /** Null = carpeta reconocida pero sin empresa: se ignora y se dice. */
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([conexionId, ruta])
+  @@index([companyId])
 }
 
 enum BankAction {

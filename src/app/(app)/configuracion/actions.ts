@@ -24,6 +24,26 @@ function failure(error: unknown): Result {
   return { ok: false, error: "No fue posible guardar" };
 }
 
+/**
+ * Corta la conexión con Dropbox. Borra el token cifrado, el cursor y el mapeo
+ * de carpetas: reconectar arranca de cero, que es lo correcto si se cambia de
+ * cuenta.
+ *
+ * Esto NO revoca la app del lado de Dropbox — eso se hace desde
+ * dropbox.com/account/connected_apps y conviene decirlo, porque quien
+ * desconecta suele querer las dos cosas.
+ */
+export async function desconectarDropbox(): Promise<Result> {
+  try {
+    await requireAdmin();
+    await prisma.dropboxConnection.deleteMany({});
+    revalidatePath("/configuracion");
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 async function requireAdmin() {
   const user = await requireUser();
   if (user.role !== "FUND_ADMIN") throw new Error("Solo el fondo puede modificar la configuración");
