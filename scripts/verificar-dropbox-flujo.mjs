@@ -85,17 +85,40 @@ if (url) {
     (comoAdmin.headers.getSetCookie?.() ?? []).some((c) => c.startsWith("dropbox_state=") && /httponly/i.test(c)));
 
   // ── 4) ¿Dropbox acepta esta app y esta dirección de retorno? ──
-  // Si la app o el redirect_uri estuvieran mal, Dropbox devuelve una página de
-  // error en vez del consentimiento. Esto se puede comprobar sin iniciar sesión.
-  const enDropbox = await fetch(destino, { redirect: "manual" });
-  const cuerpo = await enDropbox.text().catch(() => "");
-  const malRedirect = /redirect_uri/i.test(cuerpo) && /invalid|mismatch|no coincide/i.test(cuerpo);
-  const appInvalida = /invalid_client|client_id/i.test(cuerpo) && /invalid/i.test(cuerpo);
-  check(
-    "Dropbox acepta la app y la dirección de retorno",
-    !malRedirect && !appInvalida,
-    malRedirect ? "¡el redirect_uri NO está registrado en la app!" : appInvalida ? "la App key no es válida" : `respondió ${enDropbox.status}`,
-  );
+  //
+  // OJO: Dropbox rechaza con un 302 hacia /oauth2/authorize_error, no con un
+  // 4xx. La primera versión de este chequeo daba el 302 por bueno y decía que
+  // todo estaba bien mientras la conexión fallaba en la cara del usuario. Hay
+  // que SEGUIR la redirección y mirar a dónde lleva.
+  let paso = destino;
+  let respuesta = await fetch(paso, { redirect: "manual" });
+  for (let i = 0; i < 5 && respuesta.status >= 300 && respuesta.status < 400; i++) {
+    const siguiente = respuesta.headers.get("location");
+    if (!siguiente) break;
+    paso = new URL(siguiente, paso).toString();
+    if (paso.includes("authorize_error")) break; // ya sabemos que rechazó
+    respuesta = await fetch(paso, { redirect: "manual" });
+  }
+
+  if (paso.includes("authorize_error")) {
+    const detalle = decodeURIComponent(new URL(paso).searchParams.get("error_detail") ?? "");
+    const esRedirect = /redirect_uri/i.test(detalle);
+    check(
+      "Dropbox acepta la app y la dirección de retorno",
+      false,
+      esRedirect
+        ? `el redirect_uri NO está registrado en la app de Dropbox. Agregá exactamente: ${p.get("redirect_uri")}`
+        : detalle.slice(0, 140),
+    );
+  } else {
+    // Sin sesión de Dropbox termina en la pantalla de login, que es lo esperado:
+    // significa que la app y la URL de retorno pasaron la validación.
+    check(
+      "Dropbox acepta la app y la dirección de retorno",
+      /dropbox\.com/.test(paso) && !/authorize_error/.test(paso),
+      `llegó a ${new URL(paso).pathname}`,
+    );
+  }
 }
 
 // ── 5) El callback rechaza un state que no coincide ──
